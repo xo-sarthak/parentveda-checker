@@ -46,14 +46,16 @@ button{font:inherit; color:inherit; cursor:pointer; border:0; background:none}
   overflow:hidden; white-space:nowrap;
 }
 .brand{
-  display:flex; align-items:center; gap:9px; padding:20px 14px 14px 18px;
+  display:flex; align-items:flex-start; gap:9px; padding:18px 14px 14px 18px;
 }
+.brand-lockup{display:flex; flex-direction:column; gap:3px; min-width:0}
 .brand-mark{
-  width:22px; height:22px; border-radius:5px; background:var(--accent);
-  display:grid; place-items:center; color:var(--surface);
-  font-size:11px; font-weight:600; flex:none;
+  display:block; width:62px; height:auto; margin-left:-3px; opacity:.9;
 }
-.brand-name{font-weight:600; letter-spacing:-.01em; font-size:14px}
+.brand-name{
+  font-weight:600; letter-spacing:.01em; font-size:13px; color:var(--ink);
+}
+.rail-toggle{margin-left:auto; margin-top:2px}
 .rail-search{padding:0 14px 12px}
 .search-box{
   display:flex; align-items:center; gap:7px; padding:7px 10px;
@@ -381,9 +383,10 @@ input[type=checkbox]{accent-color:var(--accent); width:15px; height:15px}
   box-shadow:0 2px 22px rgba(25,26,24,.06);
   display:flex; flex-direction:column; align-items:center; gap:0;
 }
+.gate-mark{display:block; width:88px; height:auto; margin-bottom:10px; opacity:.9}
 .gate-card h1{
   font-family:Newsreader,Georgia,serif; font-size:24px; font-weight:500;
-  margin:16px 0 6px;
+  margin:6px 0 6px;
 }
 .gate-card p{color:var(--ink-2); font-size:13px; margin:0 0 22px; line-height:1.55}
 .btn.google{

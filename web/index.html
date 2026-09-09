@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;450;500;600&display=swap">
+<link rel="icon" href="/logo.png">
 <link rel="stylesheet" href="/style.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.58.0/dist/umd/supabase.min.js"></script>
 </head>
@@ -14,7 +15,8 @@
 
 <div class="gate" id="gate" hidden>
   <div class="gate-card">
-    <div class="brand-mark mono" style="width:34px; height:34px; font-size:14px; border-radius:8px">PV</div>
+    <img class="gate-mark" src="/logo.png" srcset="/logo.png 1x, /logo@2x.png 2x"
+         alt="" width="88" height="27">
     <h1>Article Checker</h1>
     <p>Sign in to review, revise and track ParentVeda articles.</p>
     <button class="btn google" id="googleBtn">
@@ -34,9 +36,12 @@
 
   <aside class="rail">
     <div class="brand">
-      <div class="brand-mark mono">PV</div>
-      <div class="brand-name">Article Checker</div>
-      <button class="rail-toggle" id="railClose" style="margin-left:auto"
+      <div class="brand-lockup">
+        <img class="brand-mark" src="/logo.png" srcset="/logo.png 1x, /logo@2x.png 2x"
+             alt="" width="62" height="19">
+        <div class="brand-name">Article Checker</div>
+      </div>
+      <button class="rail-toggle" id="railClose"
               title="Hide sidebar (Ctrl+\)" aria-label="Hide sidebar">&#10094;</button>
     </div>
 

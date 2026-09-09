@@ -12,6 +12,7 @@ app/prompts/
 data/
 mockup/
 scripts/add_experts.py
+logo-article-checker.png
 
 # --- python ----------------------------------------------------------------
 __pycache__/

@@ -386,6 +386,21 @@ def style():
     return FileResponse(WEB / "style.css", media_type="text/css")
 
 
+@app.get("/logo.png")
+def logo():
+    return FileResponse(WEB / "logo.png", media_type="image/png")
+
+
+@app.get("/logo@2x.png")
+def logo2x():
+    return FileResponse(WEB / "logo@2x.png", media_type="image/png")
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return FileResponse(WEB / "logo.png", media_type="image/png")
+
+
 @app.get("/api/config")
 def client_config():
     return auth.public_config()
