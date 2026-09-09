@@ -398,4 +398,43 @@ def me(who: str = Depends(auth.actor)):
 
 @app.get("/health")
 def health():
-    return {"ok": True, "models": config.MODELS}
+    """Enough to diagnose a deploy without exposing anything.
+
+    Reports whether the editorial content loaded, and from where — the
+    deployed app carries none of it on disk, so this is the check that
+    matters after a fresh deploy.
+    """
+    import hashlib
+
+    out: dict = {"ok": True, "models": config.MODELS, "effort": config.EFFORT}
+
+    items = {}
+    for name in ("ruleset", "judge", "editor", "doctor"):
+        try:
+            body = content.get(name)
+            on_disk = content._FALLBACK[name].exists()
+            items[name] = {
+                "loaded": True,
+                "source": "local file" if on_disk else "database",
+                "chars": len(body),
+                "sha": hashlib.sha256(body.encode()).hexdigest()[:8],
+            }
+        except Exception as exc:
+            out["ok"] = False
+            items[name] = {"loaded": False, "error": str(exc)[:160]}
+    out["content"] = items
+
+    try:
+        with store.connect() as conn, conn.cursor() as cur:
+            cur.execute("select count(*) as n from published")
+            out["catalogue_articles"] = cur.fetchone()["n"]
+            cur.execute("select count(*) as n from articles")
+            out["articles"] = cur.fetchone()["n"]
+            cur.execute("select count(*) as n from experts where onboarded")
+            out["experts_onboarded"] = cur.fetchone()["n"]
+        out["database"] = "connected"
+    except Exception as exc:
+        out["ok"] = False
+        out["database"] = f"unreachable: {str(exc)[:120]}"
+
+    return out
