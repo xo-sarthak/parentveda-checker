@@ -229,6 +229,25 @@ kbd{
   display:block; font-size:10px; letter-spacing:.07em; text-transform:uppercase;
   color:var(--accent); margin-bottom:3px; font-weight:600;
 }
+
+/* before / after — so nobody has to reopen the draft to see the change */
+.ba{display:flex; flex-direction:column; gap:0; margin:9px 0 8px}
+.ba-now, .ba-new{border-radius:7px; padding:9px 12px; font-size:12.5px; line-height:1.55}
+.ba-now{background:var(--surface-2); border:1px solid var(--line)}
+.ba-new{background:var(--accent-soft); border:1px solid transparent}
+.ba-now b, .ba-new b{
+  display:block; font-size:9.5px; letter-spacing:.08em; text-transform:uppercase;
+  font-weight:600; margin-bottom:4px;
+}
+.ba-now b{color:var(--ink-3)}
+.ba-new b{color:var(--accent)}
+.ba-now span{color:var(--ink-2)}
+.ba-new span{color:var(--ink)}
+.ba-none span{font-style:italic; color:var(--ink-3)}
+.ba-arrow{
+  align-self:center; color:var(--ink-3); font-size:13px; line-height:1;
+  padding:3px 0;
+}
 .f-why{font-size:12px; color:var(--ink-3); margin-top:7px}
 .f-acts{display:flex; gap:5px}
 .act{

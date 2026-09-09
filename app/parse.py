@@ -34,6 +34,47 @@ def from_bytes(filename: str, data: bytes) -> str:
     return data.decode("utf-8", "replace").strip()
 
 
+# Headings that mark the end of the article and the start of internal
+# production material. Everything from the first of these onward is for the
+# team, never for a parent, and is not reviewed.
+INTERNAL_MARKERS = (
+    "paste-safe table source",
+    "change log",
+    "changelog",
+    "seo pack",
+    "doctor validation table",
+    "clinician validation",
+    "publishing checklist",
+    "visual experience recommendations",
+    "internal linking suggestions",
+    "quality report",
+    "auto-gate",
+    "auto gate",
+    "handoff",
+    "hand-off",
+    "notes for the editor",
+    "editor notes",
+    "revert note",
+)
+
+
+def split_internal(body: str) -> tuple[str, str]:
+    """Return (what a reader would see, what is internal).
+
+    Cuts at the first internal heading. A heading is a short line — anything
+    long enough to be a sentence is prose that happens to mention the words.
+    """
+    lines = body.splitlines()
+    for i, raw in enumerate(lines):
+        line = raw.strip().lstrip("#").strip().strip("*_").rstrip(":").strip()
+        if not line or len(line) > 70:
+            continue
+        low = line.lower()
+        if any(low.startswith(m) or low == m for m in INTERNAL_MARKERS):
+            return "\n".join(lines[:i]).rstrip(), "\n".join(lines[i:]).strip()
+    return body, ""
+
+
 def guess_title(body: str, fallback: str = "Untitled") -> str:
     """First substantial line, minus any markdown heading marks."""
     for line in body.splitlines():

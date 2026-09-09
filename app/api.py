@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -32,14 +33,23 @@ async def review(file: UploadFile | None = File(None),
     else:
         raise HTTPException(400, "Send a file or some text.")
 
+    # Everything from the first production heading onward is internal and is
+    # stored but never reviewed — reviewing it produced findings about the
+    # team's own scaffolding rather than about the article.
+    body, internal = parse.split_internal(body)
+
     if len(body.split()) < 120:
         raise HTTPException(400, "That looks too short to review — under 120 words.")
 
-    result = judge.review(body, catalogue=content.catalogue(),
-                          model=config.MODELS["score"])
+    # judge.review blocks for minutes. On the event loop that freezes every
+    # other request, so it runs in a worker thread instead.
+    result = await run_in_threadpool(
+        judge.review, body, content.catalogue(), config.MODELS["score"])
     ids = store.save_review(title or parse.guess_title(body, file.filename if file else "Untitled"),
                             body, result, author=author, actor=who)
-    return {**ids, "review": _shape(result, ids["run_id"])}
+    return {**ids,
+            "review": _shape(result, ids["run_id"]),
+            "internal_words": len(internal.split())}
 
 
 def _shape(result: dict, run_id: str) -> dict:
@@ -296,16 +306,39 @@ def mark_verified(req: VerifyReq, who: str = Depends(auth.actor)):
 
 # ------------------------------------------------------------------ export
 
+DOCX_TYPE = ("application/vnd.openxmlformats-officedocument"
+             ".wordprocessingml.document")
+
+
+def _download(data: bytes, name: str, media: str) -> Response:
+    return Response(data, media_type=media, headers={
+        "Content-Disposition": f'attachment; filename="{name}"',
+        "Content-Length": str(len(data)),
+    })
+
+
 @app.get("/api/export/{article_id}.docx")
 def export_docx(article_id: str):
     row = _latest(article_id)
     data = export.to_docx(row["title"], row["body"],
                           subtitle="ParentVeda · reviewed draft")
-    name = re.sub(r"[^a-z0-9]+", "-", row["title"].lower()).strip("-")[:60]
-    return Response(
-        data,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="{name}.docx"'})
+    return _download(data, export.filename(row["title"], "docx"), DOCX_TYPE)
+
+
+@app.get("/api/export/{article_id}.pdf")
+def export_pdf(article_id: str):
+    """A real PDF, straight to the browser's downloads. No print dialog."""
+    row = _latest(article_id)
+    data = export.to_pdf(row["title"], row["body"],
+                         subtitle="ParentVeda · reviewed draft")
+    return _download(data, export.filename(row["title"], "pdf"), "application/pdf")
+
+
+@app.get("/api/export/{article_id}.md")
+def export_md(article_id: str):
+    row = _latest(article_id)
+    return _download(row["body"].encode("utf-8"),
+                     export.filename(row["title"], "md"), "text/markdown")
 
 
 @app.get("/api/export/{article_id}.html")
@@ -324,13 +357,28 @@ def sheet_docx(verification_id: str):
         row = cur.fetchone()
     if not row:
         raise HTTPException(404, "No such sheet.")
-    data = export.to_docx(f"Verification sheet — {row['title']}", row["sheet_text"],
+    title = f"Verification sheet — {row['title']}"
+    data = export.to_docx(title, row["sheet_text"],
                           subtitle=f"For a {row['specialty']} reviewer",
                           footer=export.sheet_footer(row["specialty"]))
-    return Response(
-        data,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": 'attachment; filename="verification-sheet.docx"'})
+    return _download(data, export.filename(f"{row['title']} verification sheet", "docx"),
+                     DOCX_TYPE)
+
+
+@app.get("/api/sheet/{verification_id}.pdf")
+def sheet_pdf(verification_id: str):
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute("select v.sheet_text, v.specialty, a.title from verification v "
+                    "join articles a on a.id=v.article_id where v.id=%s",
+                    (verification_id,))
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "No such sheet.")
+    data = export.to_pdf(f"Verification sheet — {row['title']}", row["sheet_text"],
+                         subtitle=f"For a {row['specialty']} reviewer",
+                         footer=export.sheet_footer(row["specialty"]))
+    return _download(data, export.filename(f"{row['title']} verification sheet", "pdf"),
+                     "application/pdf")
 
 
 # ------------------------------------------------------------------ experts

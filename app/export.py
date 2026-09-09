@@ -132,6 +132,84 @@ ul {{ padding-left: 20px }}
 </body></html>"""
 
 
+def to_pdf(title: str, body: str, *, subtitle: str | None = None,
+           footer: str | None = None) -> bytes:
+    """A real PDF, generated server-side — no print dialog."""
+    from reportlab.lib.enums import TA_LEFT
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (ListFlowable, ListItem, Paragraph,
+                                    SimpleDocTemplate, Spacer)
+
+    ink, muted = "#191A18", "#63665F"
+    body_st = ParagraphStyle("body", fontName="Times-Roman", fontSize=11,
+                             leading=16.5, spaceAfter=7, textColor=ink,
+                             alignment=TA_LEFT)
+    h1 = ParagraphStyle("h1", parent=body_st, fontName="Times-Bold",
+                        fontSize=19, leading=23, spaceAfter=3)
+    sub = ParagraphStyle("sub", parent=body_st, fontName="Helvetica",
+                         fontSize=8.5, leading=12, textColor=muted, spaceAfter=16)
+    h2 = ParagraphStyle("h2", parent=body_st, fontName="Times-Bold",
+                        fontSize=14, leading=18, spaceBefore=15, spaceAfter=4)
+    h3 = ParagraphStyle("h3", parent=body_st, fontName="Times-Bold",
+                        fontSize=12, leading=16, spaceBefore=11, spaceAfter=3)
+    foot = ParagraphStyle("foot", parent=sub, spaceBefore=20, spaceAfter=0)
+
+    def rich(t: str) -> str:
+        t = (t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+        return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
+
+    flow = [Paragraph(rich(title), h1)]
+    if subtitle:
+        flow.append(Paragraph(rich(subtitle), sub))
+
+    bullets, first = [], True
+
+    def flush():
+        nonlocal bullets
+        if bullets:
+            flow.append(ListFlowable(
+                [ListItem(Paragraph(b, body_st), leftIndent=12) for b in bullets],
+                bulletType="bullet", bulletFontSize=7, leftIndent=14,
+                spaceAfter=7))
+            bullets = []
+
+    for kind, level, chunk in _blocks(body):
+        if kind == "li":
+            bullets.append(rich(chunk))
+            continue
+        flush()
+        if kind == "h":
+            if first and chunk.strip().lower() == title.strip().lower():
+                first = False
+                continue
+            flow.append(Paragraph(rich(chunk), h2 if level <= 2 else h3))
+        else:
+            flow.append(Paragraph(rich(chunk), body_st))
+        first = False
+    flush()
+
+    if footer:
+        flow.append(Spacer(1, 6))
+        flow.append(Paragraph(rich(footer), foot))
+
+    buf = io.BytesIO()
+    SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=22 * mm, rightMargin=22 * mm,
+        topMargin=20 * mm, bottomMargin=20 * mm,
+        title=title, author="ParentVeda Article Checker",
+    ).build(flow)
+    return buf.getvalue()
+
+
+def filename(title: str, kind: str) -> str:
+    """e.g. cradle-cap-in-babies--article-checker.pdf"""
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:70] or "article"
+    return f"{slug}--article-checker.{kind}"
+
+
 def sheet_footer(specialty: str) -> str:
     return (f"Verification sheet · {specialty} · generated "
             f"{date.today().strftime('%d %b %Y')} · "

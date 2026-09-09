@@ -239,8 +239,15 @@ function renderReview() {
             <div class="f-body">
               <div class="f-sum">${esc(f.summary)}</div>
               <div class="f-param">${esc(f.parameter)} &middot; ${esc(f.kind)}</div>
-              ${f.quote ? `<blockquote class="quote">${esc(f.quote)}</blockquote>` : ''}
-              <div class="proposed"><b>Change to</b>${esc(f.proposed)}</div>
+              <div class="ba">
+                ${f.quote
+                  ? `<div class="ba-now"><b>What it says now</b><span>${esc(f.quote)}</span></div>`
+                  : `<div class="ba-now ba-none"><b>What it says now</b>
+                     <span>Nothing to replace &mdash; this is a change to the article's
+                     shape rather than to a sentence.</span></div>`}
+                <div class="ba-arrow" aria-hidden="true">&darr;</div>
+                <div class="ba-new"><b>${f.kind === 'line' ? 'Change it to' : 'What to do'}</b><span>${esc(f.proposed)}</span></div>
+              </div>
               ${f.rationale ? `<div class="f-why">${esc(f.rationale)}</div>` : ''}
             </div>
             <div class="f-acts">
@@ -411,8 +418,8 @@ function renderResult(res, before) {
         <span class="foot-status">Export, or send for clinical verification below.</span>
         <div class="topbar-actions">
           <button class="btn" id="copyFinal">Copy text</button>
-          <button class="btn" id="dlDocx">Download DOCX</button>
-          <button class="btn" id="dlPdf">Print / PDF</button>
+          <button class="btn" id="dlDocx">Word</button>
+          <button class="btn" id="dlPdf">PDF</button>
           <button class="btn btn-primary" id="reviewAgain">Review again</button>
         </div>
       </div>
@@ -437,10 +444,7 @@ function renderResult(res, before) {
   };
   const aid = state.articleId;
   $('#dlDocx').onclick = () => { location.href = `/api/export/${aid}.docx`; };
-  $('#dlPdf').onclick = () => {
-    const w = window.open(`/api/export/${aid}.html`, '_blank');
-    if (w) setTimeout(() => w.print(), 900); else toast('Allow pop-ups to print', true);
-  };
+  $('#dlPdf').onclick = () => { location.href = `/api/export/${aid}.pdf`; };
   $('#makeSheet').onclick = () => makeSheet(aid);
   $('#reviewAgain').onclick = () => {
     state.runId = res.run_id;
@@ -491,13 +495,16 @@ async function makeSheet(articleId) {
       <div class="footbar" style="position:static; border:0; padding-top:14px">
         <span class="foot-status">The article is held at “awaiting doctor” until someone marks it verified.</span>
         <div class="topbar-actions">
-          <button class="btn" id="dlSheet">Download sheet</button>
+          <button class="btn" id="dlSheetDocx">Sheet &mdash; Word</button>
+          <button class="btn" id="dlSheet">Sheet &mdash; PDF</button>
           ${experts.length ? '<button class="btn btn-primary" id="sendSheet">Send to selected</button>' : ''}
         </div>
       </div>`;
 
     $('#sheetBody').textContent = res.sheet;
-    $('#dlSheet').onclick = () => { location.href = `/api/sheet/${res.verification_id}.docx`; };
+    $('#dlSheet').onclick = () => { location.href = `/api/sheet/${res.verification_id}.pdf`; };
+    const sd = $('#dlSheetDocx');
+    if (sd) sd.onclick = () => { location.href = `/api/sheet/${res.verification_id}.docx`; };
     const send = $('#sendSheet');
     if (send) send.onclick = async () => {
       const ids = [...document.querySelectorAll('.pick:checked')].map(c => c.value);
@@ -571,7 +578,7 @@ async function openDetail(id) {
                       : '<span class="badge b-warn">Awaiting</span>'}</td>
                 <td style="white-space:nowrap">
                   <button class="btn" style="padding:3px 9px; font-size:12px"
-                          onclick="location.href='/api/sheet/${v.id}.docx'">Sheet</button>
+                          onclick="location.href='/api/sheet/${v.id}.pdf'">Sheet</button>
                   ${v.verified_at ? '' :
                     `<button class="btn btn-primary markver" data-id="${v.id}"
                              style="padding:3px 9px; font-size:12px">Mark verified</button>`}
