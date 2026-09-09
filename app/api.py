@@ -398,7 +398,15 @@ def logo2x():
 
 @app.get("/favicon.ico")
 def favicon():
-    return FileResponse(WEB / "logo.png", media_type="image/png")
+    return FileResponse(WEB / "favicon.ico", media_type="image/x-icon")
+
+
+@app.get("/favicon-{size}.png")
+def favicon_png(size: str):
+    path = WEB / f"favicon-{size}.png"
+    if not path.exists():
+        raise HTTPException(404, "No icon that size.")
+    return FileResponse(path, media_type="image/png")
 
 
 @app.get("/api/config")
