@@ -1,0 +1,31 @@
+# --- secrets ---------------------------------------------------------------
+.env
+*.env
+!.env.example
+
+# --- ParentVeda editorial content ------------------------------------------
+# The Handbook, Publishing Bible, compiled ruleset, prompts and article drafts
+# are ParentVeda's method. They live in the database, not in source control.
+# Run scripts/sync_content.py to push local copies up.
+corpus/
+app/prompts/
+data/
+mockup/
+scripts/add_experts.py
+
+# --- python ----------------------------------------------------------------
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+
+# --- local tooling ---------------------------------------------------------
+.claude/
+
+# --- editors / os ----------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

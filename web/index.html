@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ParentVeda Article Checker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;450;500;600&display=swap">
+<link rel="stylesheet" href="/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.58.0/dist/umd/supabase.min.js"></script>
+</head>
+<body>
+
+<div class="gate" id="gate" hidden>
+  <div class="gate-card">
+    <div class="brand-mark mono" style="width:34px; height:34px; font-size:14px; border-radius:8px">PV</div>
+    <h1>Article Checker</h1>
+    <p>Sign in to review, revise and track ParentVeda articles.</p>
+    <button class="btn google" id="googleBtn">
+      <svg width="17" height="17" viewBox="0 0 48 48" aria-hidden="true">
+        <path fill="#4285F4" d="M45 24c0-1.6-.1-2.7-.4-3.9H24v7.1h12c-.2 1.9-1.5 4.7-4.4 6.6l6.7 5.2C42.2 35.6 45 30.3 45 24z"/>
+        <path fill="#34A853" d="M24 46c5.9 0 10.9-2 14.5-5.3l-6.9-5.4c-1.9 1.3-4.4 2.2-7.6 2.2-5.8 0-10.7-3.8-12.5-9.1l-7.1 5.5C8.1 41 15.5 46 24 46z"/>
+        <path fill="#FBBC05" d="M11.5 28.4c-.5-1.4-.7-2.9-.7-4.4s.3-3 .7-4.4l-7.1-5.5C2.9 17 2 20.4 2 24s.9 7 2.4 9.9l7.1-5.5z"/>
+        <path fill="#EA4335" d="M24 10.7c4.1 0 6.9 1.8 8.5 3.3l6.1-6C34.9 4.5 29.9 2 24 2 15.5 2 8.1 7 4.4 14.1l7.1 5.5C13.3 14.5 18.2 10.7 24 10.7z"/>
+      </svg>
+      Continue with Google
+    </button>
+    <p class="gate-note" id="gateNote">Everyone on the team sees the same articles and history.</p>
+  </div>
+</div>
+
+<div class="app" id="shell" hidden>
+
+  <aside class="rail">
+    <div class="brand">
+      <div class="brand-mark mono">PV</div>
+      <div class="brand-name">Article Checker</div>
+      <button class="rail-toggle" id="railClose" style="margin-left:auto"
+              title="Hide sidebar (Ctrl+\)" aria-label="Hide sidebar">&#10094;</button>
+    </div>
+
+    <div class="rail-search">
+      <label class="search-box">
+        <span aria-hidden="true">&#8981;</span>
+        <input type="search" id="search" placeholder="Search articles&hellip;" aria-label="Search articles">
+      </label>
+    </div>
+
+    <div class="filters" id="filters">
+      <button class="chip" aria-pressed="true" data-status="">All</button>
+      <button class="chip" aria-pressed="false" data-status="reviewed">Needs review</button>
+      <button class="chip" aria-pressed="false" data-status="sent_for_verification">Awaiting doctor</button>
+      <button class="chip" aria-pressed="false" data-status="verified">Verified</button>
+    </div>
+
+    <div class="rail-label">Articles</div>
+    <nav class="list" id="articleList">
+      <div class="empty">Loading&hellip;</div>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="crumbs">
+        <button class="rail-toggle topbar-toggle" id="railOpen"
+                title="Show sidebar (Ctrl+\)" aria-label="Show sidebar">&#9776;</button>
+        <span>Articles</span><span>&rsaquo;</span><span id="crumb" style="color:var(--ink)">New</span>
+      </div>
+      <div class="topbar-actions">
+        <button class="btn" data-goto="new">+ New article</button>
+        <button class="btn" data-goto="experts">Experts</button>
+        <button class="btn" id="whoBtn" title="Sign out"></button>
+      </div>
+    </div>
+
+    <!-- new -->
+    <section class="stage screen on" id="s-new">
+      <div class="drop" id="dropZone">
+        <h2>Drop an article, or paste it below</h2>
+        <p>.docx, .md or plain text &middot; scored against the ParentVeda Bible in about a minute</p>
+        <button class="btn btn-primary" id="pickFile">Choose file</button>
+        <input type="file" id="fileInput" accept=".docx,.md,.txt" hidden>
+      </div>
+      <div class="panel" style="margin-top:16px">
+        <h3>Or paste the text</h3>
+        <textarea class="paste" id="pasteBox" placeholder="Paste the full draft here&hellip;"></textarea>
+        <div class="footbar" style="position:static; border:0; padding-top:13px">
+          <span class="foot-status" id="pasteCount">0 words</span>
+          <button class="btn btn-primary" id="reviewPaste">Review this</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- review -->
+    <section class="stage screen" id="s-review"></section>
+
+    <!-- result -->
+    <section class="stage screen" id="s-result"></section>
+
+    <!-- detail -->
+    <section class="stage screen" id="s-detail"></section>
+
+    <!-- experts -->
+    <section class="stage screen" id="s-experts"></section>
+  </main>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

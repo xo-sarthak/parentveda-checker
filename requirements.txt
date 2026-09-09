@@ -1,0 +1,7 @@
+anthropic>=1.4.0
+fastapi>=0.141.0
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+psycopg[binary]>=3.2
+pyjwt[crypto]>=2.9
+python-docx>=1.1

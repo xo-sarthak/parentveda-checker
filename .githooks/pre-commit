@@ -1,0 +1,11 @@
+#!/bin/sh
+# Refuses the commit if a secret or editorial content would go up.
+python scripts/check_secrets.py > /tmp/pv_secrets.txt 2>&1
+if grep -q "SECRETS FOUND" /tmp/pv_secrets.txt; then
+  echo ""
+  cat /tmp/pv_secrets.txt
+  echo ""
+  echo "Commit refused. Fix the above, or bypass with: git commit --no-verify"
+  exit 1
+fi
+exit 0
