@@ -129,23 +129,60 @@ async function submit({ file, text }) {
   go('review');
   $('#s-review').innerHTML =
     `<div class="working"><span class="spinner"></span>
-     Reading against the ParentVeda Bible &mdash; usually 45&ndash;90 seconds.</div>`;
+       <div>
+         <div id="workPhase">Reading against the ParentVeda Bible&hellip;</div>
+         <div class="worknote">Opus reads the whole article against twelve parameters before
+           it writes anything. Two to three minutes is normal &mdash;
+           <span id="workClock" class="mono">0:00</span> elapsed.</div>
+       </div>
+     </div>`;
+  startClock();
   const fd = new FormData();
   if (file) fd.append('file', file); else fd.append('text', text);
   try {
     const res = await api('/api/review', { method: 'POST', body: fd });
+    stopClock();
     state.articleId = res.article_id;
     state.runId = res.run_id;
     state.review = res.review;
     renderReview();
     loadList();
   } catch (e) {
+    stopClock();
     $('#s-review').innerHTML =
       `<div class="blocker"><span style="color:var(--must)">&#9888;</span>
        <div><div class="blocker-t">Review failed</div>
        <div style="font-size:12.5px; color:var(--ink-2)">${esc(e.message)}</div></div></div>
        <button class="btn" onclick="location.reload()">Start again</button>`;
   }
+}
+
+/* ------------------------------------------------------------- progress */
+
+let clockTimer = null;
+const PHASES = [
+  [0,   'Reading against the ParentVeda Bible&hellip;'],
+  [35,  'Checking the twelve parameters&hellip;'],
+  [80,  'Comparing against your published articles&hellip;'],
+  [125, 'Writing up the findings&hellip;'],
+  [200, 'Still working &mdash; long articles take longer.'],
+];
+
+function startClock() {
+  const t0 = Date.now();
+  stopClock();
+  clockTimer = setInterval(() => {
+    const s = Math.floor((Date.now() - t0) / 1000);
+    const el = $('#workClock');
+    if (!el) return stopClock();
+    el.textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    const phase = [...PHASES].reverse().find(([at]) => s >= at);
+    const p = $('#workPhase');
+    if (p && phase) p.innerHTML = phase[1];
+  }, 1000);
+}
+function stopClock() {
+  if (clockTimer) { clearInterval(clockTimer); clockTimer = null; }
 }
 
 /* ---------------------------------------------------------------- review */
@@ -288,15 +325,24 @@ function wireFindings() {
     go('result');
     $('#s-result').innerHTML =
       `<div class="working"><span class="spinner"></span>
-       Applying the accepted changes, then re-scoring &mdash; about two minutes.</div>`;
+         <div>
+           <div id="workPhase">Applying the accepted changes&hellip;</div>
+           <div class="worknote">Two calls run back to back &mdash; the rewrite, then a fresh
+             score. Three to five minutes is normal &mdash;
+             <span id="workClock" class="mono">0:00</span> elapsed.</div>
+         </div>
+       </div>`;
+    startClock();
     try {
       const res = await api('/api/rewrite', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ run_id: state.runId })
       });
+      stopClock();
       renderResult(res, before);
       loadList();
     } catch (e) {
+      stopClock();
       $('#s-result').innerHTML =
         `<div class="blocker"><span style="color:var(--must)">&#9888;</span>
          <div><div class="blocker-t">Rewrite failed</div>

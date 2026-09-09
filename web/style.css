@@ -327,7 +327,10 @@ input[type=checkbox]{accent-color:var(--accent); width:15px; height:15px}
 }
 @keyframes spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){ .spinner{animation-duration:2s} .app{transition:none} }
-.working{display:flex; align-items:center; gap:11px; padding:44px 0; color:var(--ink-2); font-size:13.5px}
+.working{display:flex; align-items:flex-start; gap:12px; padding:44px 0;
+  color:var(--ink); font-size:14px; line-height:1.5}
+.working .spinner{margin-top:3px; flex:none}
+.worknote{color:var(--ink-3); font-size:12.5px; margin-top:5px; max-width:44em}
 .toast{
   position:fixed; bottom:22px; left:50%; transform:translateX(-50%);
   background:var(--ink); color:var(--paper); padding:9px 16px; border-radius:8px;
