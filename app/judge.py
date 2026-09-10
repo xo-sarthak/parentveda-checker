@@ -59,24 +59,23 @@ SCHEMA: dict[str, Any] = {
                 "opening_meets_it": {"type": "boolean"},
             },
         },
+        # One array rather than twelve named objects. Twelve nested schemas
+        # compiled into a grammar Anthropic rejected as too large.
         "scores": {
-            "type": "object",
-            "additionalProperties": False,
-            "required": PARAMS,
-            "properties": {
-                p: {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["score", "justification"],
-                    "properties": {
-                        "score": {"type": "number", "description": "0-10, one decimal"},
-                        "justification": {
-                            "type": "string",
-                            "description": "Max 15 words, grounded in the text",
-                        },
+            "type": "array",
+            "description": "All twelve parameters, one entry each",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["parameter", "score", "justification"],
+                "properties": {
+                    "parameter": {"type": "string", "enum": PARAMS},
+                    "score": {"type": "number", "description": "0-10, one decimal"},
+                    "justification": {
+                        "type": "string",
+                        "description": "Max 15 words, grounded in the text",
                     },
-                }
-                for p in PARAMS
+                },
             },
         },
         "feedback": {
@@ -196,6 +195,17 @@ def review(article: str, catalogue: str = "", model: str | None = None,
             f"out={resp.usage.output_tokens} tokens"
         )
     data = json.loads(text)
+
+    if isinstance(data.get("scores"), list):
+        data["scores"] = {
+            row["parameter"]: {"score": row["score"],
+                               "justification": row.get("justification", "")}
+            for row in data["scores"]
+        }
+    missing = [p for p in PARAMS if p not in data["scores"]]
+    if missing:
+        raise RuntimeError("model omitted parameters: " + ", ".join(missing))
+
     data["overall"] = overall(data["scores"])
     data["blockers"] = check_blockers(data["scores"], data.get("blockers", []))
     data["_usage"] = {
