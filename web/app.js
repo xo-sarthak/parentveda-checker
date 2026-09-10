@@ -527,26 +527,101 @@ async function makeSheet(articleId) {
 
 async function openDetail(id) {
   go('detail');
-  $('#s-detail').innerHTML = '<div class="working"><span class="spinner"></span> Loading history&hellip;</div>';
+  $('#s-detail').innerHTML =
+    '<div class="working"><span class="spinner"></span> Loading history&hellip;</div>';
   try {
-    const d = await api('/api/articles/' + id);
-    const last = d.runs[d.runs.length - 1];
-    const dec = d.decisions.reduce((a, t) => ({
-      accepted: a.accepted + Number(t.accepted), rejected: a.rejected + Number(t.rejected),
-      total: a.total + Number(t.total)
-    }), { accepted: 0, rejected: 0, total: 0 });
-    const cost = d.runs.reduce((a, r) => a + Number(r.cost_usd || 0), 0);
+    const d = await api('/api/articles/' + id + '/trail');
     const when = t => new Date(t).toLocaleString('en-IN',
       { day: 'numeric', month: 'short', year: 'numeric',
         hour: 'numeric', minute: '2-digit', hour12: true });
+    const day = t => new Date(t).toLocaleDateString('en-IN',
+      { day: 'numeric', month: 'short' });
+
+    const runs = d.versions.flatMap(v => v.runs);
+    const last = runs[runs.length - 1];
+    const cost = runs.reduce((a, r) => a + Number(r.cost_usd || 0), 0);
+    const decided = runs.reduce((a, r) => ({
+      acc: a.acc + r.accepted, rej: a.rej + r.rejected,
+      all: a.all + r.feedback.length
+    }), { acc: 0, rej: 0, all: 0 });
+
+    const OUTCOME = {
+      accepted: ['Accepted', 'var(--good)'],
+      edited:   ['Edited then accepted', 'var(--good)'],
+      rejected: ['Rejected', 'var(--ink-3)'],
+      pending:  ['Not decided', 'var(--should)'],
+    };
+
+    const findingRow = f => {
+      const [label, colour] = OUTCOME[f.outcome] || OUTCOME.pending;
+      return `
+        <div class="tr-find">
+          <div class="tr-find-top">
+            <span class="tr-tier tr-${f.tier}">${TIERS[f.tier]}</span>
+            <span class="tr-sum">${esc(f.summary)}</span>
+            <span class="tr-outcome" style="color:${colour}">${label}</span>
+          </div>
+          ${f.quote ? `<div class="tr-was">${esc(f.quote)}</div>` : ''}
+          <div class="tr-became">${esc(f.edited_text || f.proposed)}</div>
+        </div>`;
+    };
+
+    const versionBlock = (v, i) => {
+      const r = v.runs[v.runs.length - 1];
+      const prev = i > 0 ? d.versions[i - 1] : null;
+      const prevRun = prev && prev.runs[prev.runs.length - 1];
+      const delta = (prevRun && r)
+        ? `<span class="tr-delta">${Number(prevRun.overall).toFixed(1)} &rarr;
+             <b style="color:${BAND(r.overall)}">${Number(r.overall).toFixed(1)}</b></span>`
+        : (r ? `<span class="tr-delta"><b style="color:${BAND(r.overall)}">${Number(r.overall).toFixed(1)}</b></span>` : '');
+
+      const allFindings = v.runs.flatMap(x => x.feedback);
+
+      return `
+      <details class="tr-ver"${i === d.versions.length - 1 ? ' open' : ''}>
+        <summary>
+          <span class="caret">&rsaquo;</span>
+          <span class="tr-vno mono">v${v.version_no}</span>
+          <span class="tr-what">${v.source === 'rewrite' ? 'Rewritten from accepted changes' : 'Uploaded'}</span>
+          <span class="tr-meta mono">${v.word_count.toLocaleString()} w</span>
+          <span class="tr-meta">${day(v.created_at)}</span>
+          ${delta}
+        </summary>
+        <div class="tr-body">
+          ${v.runs.map(x => `
+            <div class="tr-run">
+              <b>${x.kind === 'review' ? 'Reviewed' : 'Re-scored'}</b> ${when(x.created_at)}
+              &middot; ${esc(x.model.replace('claude-', ''))} ${esc(x.effort)}
+              &middot; $${Number(x.cost_usd).toFixed(3)}
+              &middot; ${esc(VERDICTS[x.verdict] || x.verdict)}
+              ${x.actor_email ? `&middot; ${esc(x.actor_email)}` : ''}
+              ${(x.blockers || []).length ? `<div class="tr-block">${x.blockers.map(b => esc(b)).join('<br>')}</div>` : ''}
+            </div>`).join('')}
+
+          ${allFindings.length ? `
+            <details class="tr-sub">
+              <summary><span class="caret">&rsaquo;</span>
+                ${allFindings.length} findings &mdash;
+                ${allFindings.filter(f => ['accepted','edited'].includes(f.outcome)).length} accepted,
+                ${allFindings.filter(f => f.outcome === 'rejected').length} rejected
+              </summary>
+              <div class="tr-finds">${allFindings.map(findingRow).join('')}</div>
+            </details>` : ''}
+
+          <details class="tr-sub">
+            <summary><span class="caret">&rsaquo;</span> Read the article as it was at v${v.version_no}</summary>
+            <div class="finalbody tr-text"></div>
+          </details>
+        </div>
+      </details>`;
+    };
 
     $('#s-detail').innerHTML = `
       <h1 class="art-title">${esc(d.article.title)}</h1>
       <div class="badges" style="margin:9px 0 22px">
         <span class="badge ${last && last.overall >= 9 ? 'b-good' : 'b-neutral'}">${esc(d.article.status.replace(/_/g, ' '))}</span>
         ${d.article.article_type ? `<span class="badge b-neutral">${esc(d.article.article_type.replace(/_/g, ' '))}</span>` : ''}
-        ${last ? `<span class="badge b-neutral mono">${last.word_count.toLocaleString()} words</span>` : ''}
-        ${d.article.author ? `<span class="badge b-neutral">Author: ${esc(d.article.author)}</span>` : ''}
+        ${d.article.created_by ? `<span class="badge b-neutral">${esc(d.article.created_by)}</span>` : ''}
       </div>
 
       <div class="panel">
@@ -554,8 +629,8 @@ async function openDetail(id) {
         <dl class="kv">
           <dt>Current score</dt><dd class="mono" style="color:${last ? BAND(last.overall) : 'inherit'}">
             <b>${last ? Number(last.overall).toFixed(1) : '—'}</b> — ${last ? esc(VERDICTS[last.verdict] || last.verdict) : '—'}</dd>
-          <dt>Versions</dt><dd>${new Set(d.runs.map(r => r.version_no)).size}</dd>
-          <dt>Findings</dt><dd>${dec.total} &middot; ${dec.accepted} accepted, ${dec.rejected} rejected</dd>
+          <dt>Versions</dt><dd>${d.versions.length}</dd>
+          <dt>Findings</dt><dd>${decided.all} &middot; ${decided.acc} accepted, ${decided.rej} rejected</dd>
           <dt>Sent to</dt><dd>${d.verification.length ? esc(d.verification.map(v => v.doctor_name || v.specialty).join(', ')) : 'Not yet sent'}</dd>
           <dt>Total API cost</dt><dd class="mono">$${cost.toFixed(3)}</dd>
         </dl>
@@ -573,14 +648,12 @@ async function openDetail(id) {
                 <td>${esc(v.specialty || '—')}</td>
                 <td>${v.sent_at ? when(v.sent_at) : '<span style="color:var(--ink-3)">not sent</span>'}</td>
                 <td>${v.verified_at
-                      ? `<span class="badge b-good">${when(v.verified_at)}</span>${
-                          v.verified_by ? `<div style="font-size:11px; color:var(--ink-3); margin-top:3px">marked by ${esc(v.verified_by)}</div>` : ''}`
+                      ? `<span class="badge b-good">${when(v.verified_at)}</span>${v.verified_by ? `<div style="font-size:11px; color:var(--ink-3); margin-top:3px">marked by ${esc(v.verified_by)}</div>` : ''}`
                       : '<span class="badge b-warn">Awaiting</span>'}</td>
                 <td style="white-space:nowrap">
                   <button class="btn" style="padding:3px 9px; font-size:12px"
                           onclick="location.href='/api/sheet/${v.id}.pdf'">Sheet</button>
-                  ${v.verified_at ? '' :
-                    `<button class="btn btn-primary markver" data-id="${v.id}"
+                  ${v.verified_at ? '' : `<button class="btn btn-primary markver" data-id="${v.id}"
                              style="padding:3px 9px; font-size:12px">Mark verified</button>`}
                 </td>
               </tr>`).join('')}
@@ -590,21 +663,15 @@ async function openDetail(id) {
       </div>` : ''}
 
       <div class="panel">
-        <h3>Everything that happened</h3>
-        <div class="timeline">
-          ${d.runs.map(r => `
-            <div class="tl">
-              <div class="tl-when">${when(r.created_at)}</div>
-              <div class="tl-what">${r.kind === 'review' ? 'Reviewed' : 'Re-scored'} —
-                <b class="mono" style="color:${BAND(r.overall)}">${Number(r.overall).toFixed(1)}</b>,
-                ${esc(VERDICTS[r.verdict] || r.verdict)}</div>
-              <div class="tl-detail">v${r.version_no} &middot; ${r.word_count.toLocaleString()} words &middot;
-                ${esc(r.model.replace('claude-', ''))} &middot; ${esc(r.effort)} &middot; $${Number(r.cost_usd).toFixed(3)}
-                ${(r.blockers || []).length ? ` &middot; ${r.blockers.length} blocker(s)` : ''}
-                ${r.actor_email ? `<br><span style="color:var(--ink-3)">run by ${esc(r.actor_email)}</span>` : ''}</div>
-            </div>`).join('')}
-        </div>
+        <h3>History</h3>
+        <div class="trail">${d.versions.map(versionBlock).join('')}</div>
       </div>`;
+
+    // article text set as textContent, never parsed as HTML
+    $('#s-detail').querySelectorAll('.tr-text').forEach((el, i) => {
+      el.textContent = d.versions[i].body;
+    });
+
     document.querySelectorAll('.markver').forEach(b => b.onclick = async () => {
       const notes = prompt('Any note from the reviewer? (optional)') || null;
       try {

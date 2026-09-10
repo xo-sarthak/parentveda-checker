@@ -129,6 +129,64 @@ def article_detail(article_id: str, who: str = Depends(auth.actor)):
     return {"article": art, "runs": runs, "verification": ver, "decisions": tiers}
 
 
+@app.get("/api/articles/{article_id}/trail")
+def article_trail(article_id: str, who: str = Depends(auth.actor)):
+    """Everything that happened to this article, grouped by version.
+
+    One call, so the screen can show a single expandable trail rather than
+    making someone click through versions to reconstruct the story.
+    """
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute("select id, title, status, article_type, author, created_by, "
+                    "created_at from articles where id=%s", (article_id,))
+        art = cur.fetchone()
+        if not art:
+            raise HTTPException(404, "No such article.")
+
+        cur.execute(
+            "select id, version_no, body, word_count, source, created_at "
+            "from versions where article_id=%s order by version_no", (article_id,))
+        versions = cur.fetchall()
+
+        cur.execute(
+            "select r.id, r.version_id, r.kind, r.model, r.effort, r.overall, "
+            "r.verdict, r.cost_usd, r.actor_email, r.created_at, r.blockers "
+            "from runs r join versions v on v.id = r.version_id "
+            "where v.article_id=%s order by r.created_at", (article_id,))
+        runs = cur.fetchall()
+
+        cur.execute(
+            "select f.id, f.run_id, f.tier, f.kind, f.parameter, f.summary, "
+            "f.quote, f.proposed, f.rationale, f.position, "
+            "d.outcome, d.decided_by, d.decided_at, d.auto, d.edited_text "
+            "from feedback f join runs r on r.id = f.run_id "
+            "join versions v on v.id = r.version_id "
+            "left join decisions d on d.feedback_id = f.id "
+            "where v.article_id=%s order by f.position", (article_id,))
+        feedback = cur.fetchall()
+
+        cur.execute("select * from verification where article_id=%s "
+                    "order by created_at", (article_id,))
+        verification = cur.fetchall()
+
+    by_run: dict = {}
+    for f in feedback:
+        by_run.setdefault(str(f["run_id"]), []).append(f)
+    for r in runs:
+        r["feedback"] = by_run.get(str(r["id"]), [])
+        r["accepted"] = sum(1 for f in r["feedback"]
+                            if f["outcome"] in ("accepted", "edited"))
+        r["rejected"] = sum(1 for f in r["feedback"] if f["outcome"] == "rejected")
+
+    by_version: dict = {}
+    for r in runs:
+        by_version.setdefault(str(r["version_id"]), []).append(r)
+    for v in versions:
+        v["runs"] = by_version.get(str(v["id"]), [])
+
+    return {"article": art, "versions": versions, "verification": verification}
+
+
 # ------------------------------------------------------------------ decisions
 
 class Decision(BaseModel):
