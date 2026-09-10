@@ -1,5 +1,6 @@
 """FastAPI backend. Serves the app and the endpoints behind it."""
 import re
+import time
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
@@ -43,12 +44,16 @@ async def review(file: UploadFile | None = File(None),
 
     # judge.review blocks for minutes. On the event loop that freezes every
     # other request, so it runs in a worker thread instead.
+    t0 = time.monotonic()
     result = await run_in_threadpool(
         judge.review, body, content.catalogue(), config.MODELS["score"])
+    took = round(time.monotonic() - t0, 1)
+
     ids = store.save_review(title or parse.guess_title(body, file.filename if file else "Untitled"),
-                            body, result, author=author, actor=who)
+                            body, result, author=author, actor=who,
+                            duration_s=took)
     return {**ids,
-            "review": _shape(result, ids["run_id"]),
+            "review": {**_shape(result, ids["run_id"]), "duration_s": took},
             "internal_words": len(internal.split())}
 
 
@@ -151,7 +156,7 @@ def article_trail(article_id: str, who: str = Depends(auth.actor)):
 
         cur.execute(
             "select r.id, r.version_id, r.kind, r.model, r.effort, r.overall, "
-            "r.verdict, r.cost_usd, r.actor_email, r.created_at, r.blockers "
+            "r.verdict, r.cost_usd, r.actor_email, r.created_at, r.blockers, r.duration_s "
             "from runs r join versions v on v.id = r.version_id "
             "where v.article_id=%s order by r.created_at", (article_id,))
         runs = cur.fetchall()
@@ -187,6 +192,63 @@ def article_trail(article_id: str, who: str = Depends(auth.actor)):
         v["runs"] = by_version.get(str(v["id"]), [])
 
     return {"article": art, "versions": versions, "verification": verification}
+
+
+@app.get("/api/runs/{run_id}")
+def get_run(run_id: str, who: str = Depends(auth.actor)):
+    """Reopen a past review exactly as it was, decisions and all.
+
+    Everything a review produced is already stored, so this costs nothing —
+    no model call, no tokens. It exists so an unfinished review can be
+    picked up later instead of being re-run.
+    """
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "select r.id, r.kind, r.model, r.effort, r.overall, r.verdict, "
+            "r.blockers, r.article_level, r.expert_review, r.cost_usd, "
+            "r.duration_s, r.created_at, v.article_id, v.word_count, a.title "
+            "from runs r join versions v on v.id = r.version_id "
+            "join articles a on a.id = v.article_id where r.id=%s", (run_id,))
+        run = cur.fetchone()
+        if not run:
+            raise HTTPException(404, "No such run.")
+
+        cur.execute("select parameter, score, justification from scores "
+                    "where run_id=%s", (run_id,))
+        scores = {r["parameter"]: dict(r) for r in cur.fetchall()}
+
+        cur.execute(
+            "select f.id, f.tier, f.kind, f.parameter, f.summary, f.quote, "
+            "f.proposed, f.rationale, f.position, f.headline, f.needs_validation, "
+            "d.outcome, d.edited_text "
+            "from feedback f left join decisions d on d.feedback_id = f.id "
+            "where f.run_id=%s order by f.position", (run_id,))
+        feedback = cur.fetchall()
+
+    return {
+        "article_id": str(run["article_id"]),
+        "run_id": str(run["id"]),
+        "title": run["title"],
+        "review": {
+            "overall": float(run["overall"]),
+            "verdict": run["verdict"],
+            "blockers": run["blockers"] or [],
+            "article_type": (run["article_level"] or {}).get("type", ""),
+            "article_level": run["article_level"] or {},
+            "expert_review": run["expert_review"] or {},
+            "scores": [
+                {"parameter": p, "label": config.PARAMETER_LABELS[p],
+                 "weight": config.WEIGHTS[p],
+                 "score": float(v["score"]), "justification": v["justification"]}
+                for p, v in scores.items()
+            ],
+            "feedback": feedback,
+            "usage": {"model": run["model"], "effort": run["effort"]},
+            "cost": float(run["cost_usd"] or 0),
+            "duration_s": float(run["duration_s"]) if run["duration_s"] else None,
+            "reopened": True,
+        },
+    }
 
 
 # ------------------------------------------------------------------ decisions
@@ -247,14 +309,19 @@ def rewrite(req: RewriteReq, who: str = Depends(auth.actor)):
     if not row:
         raise HTTPException(404, "No such run.")
 
+    t0 = time.monotonic()
     result = editor.rewrite(row["body"], [dict(f) for f in accepted],
                             model=config.MODELS["edit"])
+    edit_took = round(time.monotonic() - t0, 1)
 
+    t1 = time.monotonic()
     rescore = judge.review(result["body"], catalogue=content.catalogue(),
                            model=config.MODELS["score"])
+    score_took = round(time.monotonic() - t1, 1)
     ids = store.save_review(row["title"], result["body"], rescore,
                             article_id=str(row["article_id"]),
-                            kind="verify", source="rewrite", actor=who)
+                            kind="verify", source="rewrite", actor=who,
+                            duration_s=score_took)
 
     edit_cost = store.cost_usd(result["_usage"])
     return {
@@ -264,7 +331,8 @@ def rewrite(req: RewriteReq, who: str = Depends(auth.actor)):
         "applied": len(accepted),
         "edit_usage": result["_usage"],
         "edit_cost": edit_cost,
-        "review": _shape(rescore, ids["run_id"]),
+        "review": {**_shape(rescore, ids["run_id"]), "duration_s": score_took},
+        "duration_s": round(edit_took + score_took, 1),
         "total_cost": round(edit_cost + store.cost_usd(rescore["_usage"]), 4),
     }
 

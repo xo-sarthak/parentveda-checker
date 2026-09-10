@@ -38,7 +38,8 @@ def ruleset_version() -> str:
 
 def save_review(title: str, body: str, review: dict, *, author: str | None = None,
                 article_id: str | None = None, kind: str = "review",
-                source: str = "upload", actor: str | None = None) -> dict[str, Any]:
+                source: str = "upload", actor: str | None = None,
+                duration_s: float | None = None) -> dict[str, Any]:
     """Persist an article version and its review. Returns the ids created."""
     u = review["_usage"]
     with connect() as conn, conn.cursor() as cur:
@@ -64,13 +65,14 @@ def save_review(title: str, body: str, review: dict, *, author: str | None = Non
         cur.execute(
             "insert into runs (version_id, kind, model, effort, ruleset_version, "
             "overall, verdict, blockers, article_level, expert_review, "
-            "tokens_in, tokens_out, cache_write, cache_read, cost_usd, actor_email) "
-            "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id",
+            "tokens_in, tokens_out, cache_write, cache_read, cost_usd, actor_email, "
+            "duration_s) "
+            "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id",
             (version_id, kind, u["model"], u.get("effort", "high"), ruleset_version(),
              review["overall"], review["verdict"], json.dumps(review["blockers"]),
              json.dumps(review["article_level"]), json.dumps(review["expert_review"]),
              u["in"], u["out"], u.get("cache_write", 0), u.get("cache_read", 0),
-             cost_usd(u), actor))
+             cost_usd(u), actor, duration_s))
         run_id = cur.fetchone()["id"]
 
         for param, v in review["scores"].items():

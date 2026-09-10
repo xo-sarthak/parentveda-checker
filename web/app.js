@@ -10,6 +10,9 @@ const VERDICTS = {
   merge_into_existing: 'Merge into existing', not_ready: 'Not ready'
 };
 const BAND = s => s >= 9 ? 'var(--good)' : s >= 8.5 ? 'var(--should)' : 'var(--must)';
+const mmss = s => s == null ? '' :
+  (s >= 60 ? Math.floor(s / 60) + 'm ' + String(Math.round(s % 60)).padStart(2, '0') + 's'
+           : Math.round(s) + 's');
 
 let state = { articleId: null, runId: null, review: null, cursor: 0, filter: '', q: '' };
 
@@ -185,6 +188,24 @@ function stopClock() {
   if (clockTimer) { clearInterval(clockTimer); clockTimer = null; }
 }
 
+/* ---------------------------------------------------------------- reopen */
+
+async function openRun(runId) {
+  go('review');
+  $('#s-review').innerHTML =
+    '<div class="working"><span class="spinner"></span> Reopening&hellip;</div>';
+  try {
+    const res = await api('/api/runs/' + runId);
+    state.articleId = res.article_id;
+    state.runId = res.run_id;
+    state.review = res.review;
+    renderReview();
+  } catch (e) {
+    $('#s-review').innerHTML =
+      `<div class="empty">Could not reopen that review: ${esc(e.message)}</div>`;
+  }
+}
+
 /* ---------------------------------------------------------------- review */
 
 function renderReview() {
@@ -200,10 +221,13 @@ function renderReview() {
         <div class="badges">
           <span class="badge ${s >= 9 ? 'b-good' : 'b-must'}">${esc(VERDICTS[r.verdict] || r.verdict)}</span>
           <span class="badge b-neutral">${esc(r.article_type.replace(/_/g, ' '))}</span>
-          <span class="badge b-neutral mono">${esc(r.usage.model.replace('claude-', ''))} &middot; $${r.cost.toFixed(3)}</span>
+          <span class="badge b-neutral mono">${esc(r.usage.model.replace('claude-', ''))} &middot; $${r.cost.toFixed(3)}${r.duration_s ? ' &middot; ' + mmss(r.duration_s) : ''}</span>
         </div>
       </div>
     </div>
+
+    ${r.reopened ? `<div class="reopened">Reopened from history — no new review was run.
+      Decisions are saved as you make them.</div>` : ''}
 
     <div class="anchor">
       <div class="anchor-job">${esc(r.article_level.job || '')}</div>
@@ -243,7 +267,7 @@ function renderReview() {
           <span class="tier-count">${items.length}</span>
         </div>
         ${items.map(f => `
-          <article class="finding${f.headline ? ' is-headline' : ''}" data-id="${f.id}" data-tier="${f.tier}">
+          <article class="finding${f.headline ? ' is-headline' : ''}${f.outcome && f.outcome !== 'pending' ? ' done' : ''}" data-id="${f.id}" data-tier="${f.tier}">
             <div class="f-num">${f.position + 1}</div>
             <div class="f-body">
               ${f.headline ? '<div class="f-flag">Start here &mdash; the biggest issue</div>' : ''}
@@ -261,8 +285,8 @@ function renderReview() {
               ${f.rationale ? `<div class="f-why">${esc(f.rationale)}</div>` : ''}
             </div>
             <div class="f-acts">
-              <button class="act yes" aria-pressed="false" title="Accept">&#10003;</button>
-              <button class="act no" aria-pressed="false" title="Reject">&#10005;</button>
+              <button class="act yes" aria-pressed="${['accepted','edited'].includes(f.outcome) ? 'true' : 'false'}" title="Accept">&#10003;</button>
+              <button class="act no" aria-pressed="${f.outcome === 'rejected' ? 'true' : 'false'}" title="Reject">&#10005;</button>
             </div>
           </article>`).join('')}
       </div>`).join('')}
@@ -399,18 +423,11 @@ function renderResult(res, before) {
         ${esc(VERDICTS[r.verdict] || r.verdict)} &middot;
         ${d.words_before.toLocaleString()} &rarr; ${d.words_after.toLocaleString()} words &middot;
         ${esc(res.edit_usage.model.replace('claude-', ''))} + ${esc(r.usage.model.replace('claude-', ''))}
-        &middot; $${res.total_cost.toFixed(3)}
+        &middot; $${res.total_cost.toFixed(3)}${res.duration_s ? ' &middot; ' + mmss(res.duration_s) : ''}
         ${up ? '' : ' &middot; score did not improve'}
       </div>
     </div>
 
-    <div class="anchor">
-      <div class="anchor-job">${esc(r.article_level.job || '')}</div>
-      <div class="anchor-scope">${esc(r.article_level.scope || '')}</div>
-      <div class="anchor-meta">
-        ${r.article_level.length_note ? `<span>${esc(r.article_level.length_note)}</span>` : ''}
-        ${r.article_level.leave_alone ? `<span class="anchor-keep"><b>Leave alone:</b> ${esc(r.article_level.leave_alone)}</span>` : ''}
-      </div>
     </div>
 
     ${r.blockers.length ? `<div class="blocker"><span aria-hidden="true" style="color:var(--must)">&#9888;</span>
@@ -612,10 +629,18 @@ async function openDetail(id) {
               <b>${x.kind === 'review' ? 'Reviewed' : 'Re-scored'}</b> ${when(x.created_at)}
               &middot; ${esc(x.model.replace('claude-', ''))} ${esc(x.effort)}
               &middot; $${Number(x.cost_usd).toFixed(3)}
+              ${x.duration_s ? '&middot; ' + mmss(Number(x.duration_s)) : ''}
               &middot; ${esc(VERDICTS[x.verdict] || x.verdict)}
               ${x.actor_email ? `&middot; ${esc(x.actor_email)}` : ''}
               ${(x.blockers || []).length ? `<div class="tr-block">${x.blockers.map(b => esc(b)).join('<br>')}</div>` : ''}
             </div>`).join('')}
+
+          ${v.runs.some(x => x.feedback.some(f => !f.outcome || f.outcome === 'pending')) ? `
+            <div class="tr-continue">
+              <span>${v.runs.reduce((n, x) => n + x.feedback.filter(f => !f.outcome || f.outcome === 'pending').length, 0)} findings still undecided</span>
+              <button class="btn btn-primary tr-resume" data-run="${v.runs[v.runs.length - 1].id}"
+                      style="padding:4px 11px; font-size:12.5px">Continue deciding</button>
+            </div>` : ''}
 
           ${allFindings.length ? `
             <details class="tr-sub">
@@ -690,6 +715,9 @@ async function openDetail(id) {
     $('#s-detail').querySelectorAll('.tr-text').forEach((el, i) => {
       el.textContent = d.versions[i].body;
     });
+
+    document.querySelectorAll('.tr-resume').forEach(b =>
+      b.onclick = () => openRun(b.dataset.run));
 
     document.querySelectorAll('.markver').forEach(b => b.onclick = async () => {
       const notes = prompt('Any note from the reviewer? (optional)') || null;
