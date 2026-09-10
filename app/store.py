@@ -83,10 +83,11 @@ def save_review(title: str, body: str, review: dict, *, author: str | None = Non
         for i, f in enumerate(items):
             cur.execute(
                 "insert into feedback (run_id, tier, kind, parameter, summary, "
-                "quote, proposed, rationale, position) "
-                "values (%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id",
+                "quote, proposed, rationale, position, headline, needs_validation) "
+                "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id",
                 (run_id, f["tier"], f["type"], f["parameter"], f["summary"],
-                 f.get("quote"), f["proposed"], f.get("rationale"), i))
+                 f.get("quote"), f["proposed"], f.get("rationale"), i,
+                 bool(f.get("headline")), bool(f.get("needs_validation"))))
             cur.execute("insert into decisions (feedback_id) values (%s)",
                         (cur.fetchone()["id"],))
         conn.commit()

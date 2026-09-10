@@ -23,10 +23,27 @@ SCHEMA: dict[str, Any] = {
         "article_level": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["title_delivers", "title_note", "overlap_article",
+            "required": ["job", "scope", "length_note", "leave_alone",
+                         "title_delivers", "title_note", "overlap_article",
                          "overlap_percent", "should_standalone",
                          "emotional_start", "opening_meets_it"],
             "properties": {
+                "job": {
+                    "type": "string",
+                    "description": "The article's job in the reader's own words, as a question she is asking",
+                },
+                "scope": {
+                    "type": "string",
+                    "description": "One line: what kind of work this draft needs",
+                },
+                "length_note": {
+                    "type": "string",
+                    "description": "Word count and whether it suits this topic and type",
+                },
+                "leave_alone": {
+                    "type": "string",
+                    "description": "One sentence: what is working and must survive the edit",
+                },
                 "title_delivers": {"type": "boolean"},
                 "title_note": {"type": "string"},
                 "overlap_article": {
@@ -68,7 +85,8 @@ SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "additionalProperties": False,
                 "required": ["tier", "type", "parameter", "summary", "quote",
-                             "proposed", "rationale"],
+                             "proposed", "rationale", "headline",
+                             "needs_validation"],
                 "properties": {
                     "tier": {"type": "string", "enum": ["must", "should", "polish"]},
                     "type": {"type": "string", "enum": ["line", "structural"]},
@@ -80,6 +98,14 @@ SCHEMA: dict[str, Any] = {
                     },
                     "proposed": {"type": "string"},
                     "rationale": {"type": "string", "description": "One sentence"},
+                    "headline": {
+                        "type": "boolean",
+                        "description": "True on exactly one item: the single biggest issue",
+                    },
+                    "needs_validation": {
+                        "type": "boolean",
+                        "description": "True when a clinician should confirm rather than you asserting an error",
+                    },
                 },
             },
         },

@@ -205,6 +205,15 @@ function renderReview() {
       </div>
     </div>
 
+    <div class="anchor">
+      <div class="anchor-job">${esc(r.article_level.job || '')}</div>
+      <div class="anchor-scope">${esc(r.article_level.scope || '')}</div>
+      <div class="anchor-meta">
+        ${r.article_level.length_note ? `<span>${esc(r.article_level.length_note)}</span>` : ''}
+        ${r.article_level.leave_alone ? `<span class="anchor-keep"><b>Leave alone:</b> ${esc(r.article_level.leave_alone)}</span>` : ''}
+      </div>
+    </div>
+
     ${r.blockers.length ? `<div class="blocker"><span aria-hidden="true" style="color:var(--must)">&#9888;</span>
       <div><div class="blocker-t">Blocked &mdash; cannot be exported for publication</div>
       <ul>${r.blockers.map(b => `<li>${esc(b)}</li>`).join('')}</ul></div></div>` : ''}
@@ -234,11 +243,12 @@ function renderReview() {
           <span class="tier-count">${items.length}</span>
         </div>
         ${items.map(f => `
-          <article class="finding" data-id="${f.id}" data-tier="${f.tier}">
+          <article class="finding${f.headline ? ' is-headline' : ''}" data-id="${f.id}" data-tier="${f.tier}">
             <div class="f-num">${f.position + 1}</div>
             <div class="f-body">
+              ${f.headline ? '<div class="f-flag">Start here &mdash; the biggest issue</div>' : ''}
               <div class="f-sum">${esc(f.summary)}</div>
-              <div class="f-param">${esc(f.parameter)} &middot; ${esc(f.kind)}</div>
+              <div class="f-param">${esc(f.parameter)} &middot; ${esc(f.kind)}${f.needs_validation ? ' &middot; <span class="f-val">clinician to confirm</span>' : ''}</div>
               <div class="ba">
                 ${f.quote
                   ? `<div class="ba-now"><b>What it says now</b><span>${esc(f.quote)}</span></div>`
@@ -391,6 +401,15 @@ function renderResult(res, before) {
         ${esc(res.edit_usage.model.replace('claude-', ''))} + ${esc(r.usage.model.replace('claude-', ''))}
         &middot; $${res.total_cost.toFixed(3)}
         ${up ? '' : ' &middot; score did not improve'}
+      </div>
+    </div>
+
+    <div class="anchor">
+      <div class="anchor-job">${esc(r.article_level.job || '')}</div>
+      <div class="anchor-scope">${esc(r.article_level.scope || '')}</div>
+      <div class="anchor-meta">
+        ${r.article_level.length_note ? `<span>${esc(r.article_level.length_note)}</span>` : ''}
+        ${r.article_level.leave_alone ? `<span class="anchor-keep"><b>Leave alone:</b> ${esc(r.article_level.leave_alone)}</span>` : ''}
       </div>
     </div>
 

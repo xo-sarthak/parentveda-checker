@@ -56,7 +56,8 @@ def _shape(result: dict, run_id: str) -> dict:
     """Trim the model payload to what the screen actually renders."""
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute("select id, tier, kind, parameter, summary, quote, proposed, "
-                    "rationale, position from feedback where run_id=%s order by position",
+                    "rationale, position, headline, needs_validation "
+                    "from feedback where run_id=%s order by position",
                     (run_id,))
         items = cur.fetchall()
     return {
@@ -157,7 +158,8 @@ def article_trail(article_id: str, who: str = Depends(auth.actor)):
 
         cur.execute(
             "select f.id, f.run_id, f.tier, f.kind, f.parameter, f.summary, "
-            "f.quote, f.proposed, f.rationale, f.position, "
+            "f.quote, f.proposed, f.rationale, f.position, f.headline, "
+            "f.needs_validation, "
             "d.outcome, d.decided_by, d.decided_at, d.auto, d.edited_text "
             "from feedback f join runs r on r.id = f.run_id "
             "join versions v on v.id = r.version_id "
