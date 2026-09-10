@@ -714,7 +714,10 @@ async function openExperts() {
     $('#s-experts').innerHTML = `
       <div class="sec-head" style="margin-top:0">
         <h1 class="art-title" style="font-size:22px">Expert roster</h1>
-        <div class="topbar-actions"><button class="btn btn-primary" id="addExpert">+ Add expert</button></div>
+        <div class="topbar-actions">
+          <button class="btn" id="reloadRules" title="Pull the latest ruleset and prompts from the database">Reload ruleset</button>
+          <button class="btn btn-primary" id="addExpert">+ Add expert</button>
+        </div>
       </div>
       <div class="panel" id="expertForm" hidden>
         <h3>Add an expert</h3>
@@ -754,6 +757,18 @@ async function openExperts() {
         </table>
       </div>
       <p class="diffnote">Experts not yet signed are shown but cannot be sent work. Nobody is deleted — past verifications keep their attribution.</p>`;
+
+    $('#reloadRules').onclick = async () => {
+      const b = $('#reloadRules');
+      b.disabled = true; b.textContent = 'Reloading…';
+      try {
+        const r = await api('/api/refresh-content', { method: 'POST' });
+        toast(Array.isArray(r.changed) && r.changed.length
+          ? 'Reloaded — ' + r.changed.join(', ')
+          : 'Already current — nothing changed');
+      } catch (e) { toast('Could not reload: ' + e.message, true); }
+      b.disabled = false; b.textContent = 'Reload ruleset';
+    };
 
     const form = $('#expertForm');
     $('#addExpert').onclick = () => { form.hidden = false; $('#xName').focus(); };

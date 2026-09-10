@@ -76,6 +76,11 @@ def main() -> None:
             for n, sha, ln in cur.fetchall():
                 print(f"  {n:<8} {sha}  {ln:>6} chars")
 
+        print()
+        print("Written to the database. A running app still holds its old copy")
+        print("in memory — open the Experts screen and press 'Reload ruleset',")
+        print("or restart the service, before the change takes effect.")
+
 
 if __name__ == "__main__":
     main()

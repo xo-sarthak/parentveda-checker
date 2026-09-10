@@ -517,6 +517,38 @@ def favicon_png(size: str):
     return FileResponse(path, media_type="image/png")
 
 
+@app.post("/api/refresh-content")
+def refresh_content(who: str = Depends(auth.actor)):
+    """Pull the latest ruleset and prompts out of Postgres without a redeploy.
+
+    The app caches editorial content in memory at startup, so a sync_content.py
+    run does not reach a running container on its own. This drops the cache.
+    """
+    import hashlib
+
+    before = {}
+    for name in ("ruleset", "judge", "editor", "doctor"):
+        try:
+            before[name] = hashlib.sha256(
+                content.get(name).encode()).hexdigest()[:8]
+        except Exception:
+            before[name] = None
+
+    content.refresh()
+
+    changed, now = [], {}
+    for name in before:
+        try:
+            now[name] = hashlib.sha256(content.get(name).encode()).hexdigest()[:8]
+        except Exception as exc:
+            raise HTTPException(500, f"Could not reload '{name}': {exc}")
+        if now[name] != before[name]:
+            changed.append(f"{name} {before[name]} -> {now[name]}")
+
+    return {"ok": True, "changed": changed or "nothing — already current",
+            "content": now, "catalogue_articles": len(content.catalogue().split("### ")) - 1}
+
+
 @app.get("/api/config")
 def client_config():
     return auth.public_config()
