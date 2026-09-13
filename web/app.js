@@ -297,7 +297,7 @@ function renderReview() {
           <span class="tier-count">${items.length}</span>
         </div>
         ${items.map(f => `
-          <article class="finding${f.headline ? ' is-headline' : ''}${f.outcome && f.outcome !== 'pending' ? ' done' : ''}" data-id="${f.id}" data-tier="${f.tier}" data-kind="${f.free ? 'line' : 'structural'}">
+          <article class="finding${f.headline ? ' is-headline' : ''}${f.outcome && f.outcome !== 'pending' ? ' done ' + (f.outcome === 'rejected' ? 'rejected' : 'accepted') : ''}" data-id="${f.id}" data-tier="${f.tier}" data-kind="${f.free ? 'line' : 'structural'}">
             <div class="f-num">${f.position + 1}</div>
             <div class="f-body">
               ${f.headline ? '<div class="f-flag">Start here &mdash; the biggest issue</div>' : ''}
@@ -368,17 +368,25 @@ function wireFindings() {
       : rewrites ? `Apply &mdash; ${rewrites} rewrite${rewrites === 1 ? '' : 's'}, ${approx(est('rewrite').usd)} &rarr;`
       : 'Apply &mdash; free &rarr;';
   };
+  /* Clicking the already-pressed tick or cross undoes it: back to undecided. */
   const decide = async (card, yes, advance) => {
+    const btn = card.querySelector(yes ? '.yes' : '.no');
+    const undo = btn.getAttribute('aria-pressed') === 'true';
     card.querySelectorAll('.act').forEach(a => a.setAttribute('aria-pressed', 'false'));
-    card.querySelector(yes ? '.yes' : '.no').setAttribute('aria-pressed', 'true');
-    card.classList.add('done');
+    card.classList.remove('done', 'accepted', 'rejected');
+    if (!undo) {
+      btn.setAttribute('aria-pressed', 'true');
+      card.classList.add('done', yes ? 'accepted' : 'rejected');
+    }
     tally();
     try {
       await api('/api/decide', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ feedback_id: card.dataset.id, outcome: yes ? 'accepted' : 'rejected' })
+        body: JSON.stringify({ feedback_id: card.dataset.id,
+                               outcome: undo ? 'pending' : yes ? 'accepted' : 'rejected' })
       });
     } catch (e) { toast('Could not save that decision: ' + e.message, true); }
+    if (undo) return;
     if (advance) {
       const n = nextOpen(cards.indexOf(card));
       if (n === -1) return cards.forEach(c => c.classList.remove('cursor'));
@@ -401,7 +409,8 @@ function wireFindings() {
       const yes = c.dataset.tier !== 'polish';
       c.querySelectorAll('.act').forEach(a => a.setAttribute('aria-pressed', 'false'));
       c.querySelector(yes ? '.yes' : '.no').setAttribute('aria-pressed', 'true');
-      c.classList.add('done'); c.classList.remove('cursor');
+      c.classList.remove('cursor', 'accepted', 'rejected');
+      c.classList.add('done', yes ? 'accepted' : 'rejected');
     });
     tally();
     toast('Must-fix and should-fix accepted');

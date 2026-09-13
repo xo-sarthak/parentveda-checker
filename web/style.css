@@ -209,7 +209,12 @@ kbd{
 .finding:hover{border-color:var(--line-2)}
 .finding.cursor{border-color:var(--accent); box-shadow:0 0 0 1px var(--accent)}
 .finding.cursor.done{box-shadow:none}
-.finding.done{opacity:.45}
+.finding.done{opacity:.72}
+.finding.done .f-body{opacity:.8}
+.finding.rejected{border-color:var(--line)}
+.finding.rejected .f-sum{text-decoration:line-through; text-decoration-color:var(--ink-3); text-decoration-thickness:1px}
+.finding.accepted{border-color:var(--good)}
+.act[aria-pressed="true"]:hover{opacity:.8}
 .f-num{
   font-family:"IBM Plex Mono",monospace; font-size:13px; font-weight:600;
   color:var(--ink-3); padding-top:1px; font-variant-numeric:tabular-nums;
