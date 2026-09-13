@@ -22,8 +22,12 @@ let state = { articleId: null, runId: null, review: null, estimates: null,
 const RATE = () => (state.estimates && state.estimates.inr_rate) || 95;
 const inr = usd => {
   const r = usd * RATE();
-  return '\u20b9' + (r < 1 ? r.toFixed(2) : r < 10 ? r.toFixed(1) : String(Math.round(r)));
+  if (r < 0.005) return 'free';
+  if (r < 1) return 'under \u20b91';
+  return '\u20b9' + (r < 10 ? r.toFixed(1).replace(/\.0$/, '') : String(Math.round(r)));
 };
+/* "~₹11" for a real number; "under ₹1" is already approximate, no tilde. */
+const approx = usd => { const t = inr(usd); return t.startsWith('\u20b9') ? '~' + t : t; };
 const est = job => (state.estimates && state.estimates[job]) || { usd: 0, inr: 0 };
 
 /* Which provider scores, rewrites and drafts the sheet. Per browser, so two
@@ -301,7 +305,7 @@ function renderReview() {
               <div class="f-param">
                 ${f.free
                   ? '<span class="f-cost free" title="The replacement sentence is already written; applying it is an exact swap">Swap &middot; free</span>'
-                  : `<span class="f-cost paid" title="${f.kind === 'line' ? 'The proposal is an instruction rather than the sentence itself' : "A change to the article's shape"}; ${esc(shortModel(est('rewrite').model || ''))} writes it">Rewrite &middot; ~${inr(est('rewrite').usd)}</span>`}
+                  : `<span class="f-cost paid" title="${f.kind === 'line' ? 'The proposal is an instruction rather than the sentence itself' : "A change to the article's shape"}; ${esc(shortModel(est('rewrite').model || ''))} writes it">Rewrite &middot; ${approx(est('rewrite').usd)}</span>`}
                 ${esc(f.parameter)}${f.needs_validation ? ' &middot; <span class="f-val">clinician to confirm</span>' : ''}
               </div>
               <div class="ba">
@@ -330,9 +334,10 @@ function renderReview() {
       </div>
     </div>`;
 
-  $('#revTitle').textContent = r.article_level.title_note ? document.title : '';
-  fetch('/api/articles/' + state.articleId).then(x => x.json())
-    .then(d => { $('#revTitle').textContent = d.article.title; });
+  $('#revTitle').textContent = '';
+  api('/api/articles/' + state.articleId)
+    .then(d => { $('#revTitle').textContent = d.article.title; })
+    .catch(() => {});
 
   wireFindings();
 }
@@ -353,14 +358,14 @@ function wireFindings() {
     const acc = accepted();
     const swaps = acc.filter(c => c.dataset.kind === 'line').length;
     const rewrites = acc.length - swaps;
-    const cost = rewrites ? `~${inr(est('rewrite').usd)}` : 'free';
+    const cost = rewrites ? `${approx(est('rewrite').usd)}` : 'free';
     $('#tally').innerHTML = `${done} of ${cards.length} decided &middot; ${left} remaining above polish`
       + (acc.length ? `<br><b>${acc.length} accepted</b> &middot; ${swaps} swap${swaps === 1 ? '' : 's'} (free)`
         + (rewrites ? ` &middot; ${rewrites} rewrite${rewrites === 1 ? '' : 's'}` : '')
         + ` &middot; apply cost <b>${cost}</b>` : '');
     const btn = $('#applyBtn');
     if (btn) btn.innerHTML = !acc.length ? 'Apply &rarr;'
-      : rewrites ? `Apply &mdash; ${rewrites} rewrite${rewrites === 1 ? '' : 's'}, ~${inr(est('rewrite').usd)} &rarr;`
+      : rewrites ? `Apply &mdash; ${rewrites} rewrite${rewrites === 1 ? '' : 's'}, ${approx(est('rewrite').usd)} &rarr;`
       : 'Apply &mdash; free &rarr;';
   };
   const decide = async (card, yes, advance) => {
@@ -474,7 +479,7 @@ function renderResult(res, review) {
       <div class="rescore-note">
         The score above is the review's. Nothing was re-read: the reviewer wrote these
         changes, so re-scoring them buys nothing. Want a fresh number anyway?
-        <button class="btn btn-sm" id="rescoreBtn">Re-score &middot; ~${inr(est('rescore').usd)}</button>
+        <button class="btn btn-sm" id="rescoreBtn">Re-score &middot; ${approx(est('rescore').usd)}</button>
         <span id="rescoreArea"></span>
       </div>
     </div>
@@ -513,7 +518,7 @@ function renderResult(res, review) {
         images are generated.
       </p>
       <div id="imagesArea">
-        <button class="btn btn-primary" id="makeImages">Write image briefs &middot; ~${inr(est('images').usd)}</button>
+        <button class="btn btn-primary" id="makeImages">Write image briefs &middot; ${approx(est('images').usd)}</button>
       </div>
     </div>
 
@@ -524,7 +529,7 @@ function renderResult(res, review) {
         clinician can sign off without reading the article.
       </p>
       <div id="sheetArea">
-        <button class="btn btn-primary" id="makeSheet">Generate verification sheet &middot; ~${inr(est('sheet').usd)}</button>
+        <button class="btn btn-primary" id="makeSheet">Generate verification sheet &middot; ${approx(est('sheet').usd)}</button>
       </div>
     </div>`;
 
