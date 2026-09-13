@@ -16,7 +16,7 @@ allow = {l[1:] for l in lines if l.startswith('!')}
 pats = [l for l in lines if not l.startswith('!')]
 
 # Split so this file does not trip its own scan.
-MARKERS = [b'sk-' + b'ant-', b'sb_' + b'publishable', b'sb_' + b'secret',
+MARKERS = [b'sk-' + b'ant-', b'sk-' + b'proj-', b'sb_' + b'publishable', b'sb_' + b'secret',
            b'postgresql://' + b'postgres', b'eyJhbGciOiJI' + b'UzI1']
 
 

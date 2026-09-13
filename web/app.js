@@ -14,7 +14,30 @@ const mmss = s => s == null ? '' :
   (s >= 60 ? Math.floor(s / 60) + 'm ' + String(Math.round(s % 60)).padStart(2, '0') + 's'
            : Math.round(s) + 's');
 
-let state = { articleId: null, runId: null, review: null, cursor: 0, filter: '', q: '' };
+let state = { articleId: null, runId: null, review: null, estimates: null,
+              cursor: 0, filter: '', q: '' };
+
+/* Money the intern sees. Estimates come from the server per engine; the
+   real figure is recorded afterwards from usage. */
+const RATE = () => (state.estimates && state.estimates.inr_rate) || 95;
+const inr = usd => {
+  const r = usd * RATE();
+  return '\u20b9' + (r < 1 ? r.toFixed(2) : r < 10 ? r.toFixed(1) : String(Math.round(r)));
+};
+const est = job => (state.estimates && state.estimates[job]) || { usd: 0, inr: 0 };
+
+/* Which provider scores, rewrites and drafts the sheet. Per browser, so two
+   people can compare engines on the same article without touching config. */
+const ENGINE_LABEL = { claude: 'Claude', openai: 'ChatGPT' };
+let engine = 'claude';
+try { engine = localStorage.getItem('pv-engine') || engine; } catch (e) {}
+function setEngine(e) {
+  engine = e;
+  try { localStorage.setItem('pv-engine', e); } catch (e2) {}
+  document.querySelectorAll('#engineSwitch .chip').forEach(c =>
+    c.setAttribute('aria-pressed', c.dataset.engine === e ? 'true' : 'false'));
+}
+function shortModel(m) { return (m || '').replace('claude-', ''); }
 
 /* ---------------------------------------------------------------- plumbing */
 
@@ -134,7 +157,7 @@ async function submit({ file, text }) {
     `<div class="working"><span class="spinner"></span>
        <div>
          <div id="workPhase">Reading against the ParentVeda Bible&hellip;</div>
-         <div class="worknote">Opus reads the whole article against twelve parameters before
+         <div class="worknote">${ENGINE_LABEL[engine]} reads the whole article against twelve parameters before
            it writes anything. Two to three minutes is normal &mdash;
            <span id="workClock" class="mono">0:00</span> elapsed.</div>
        </div>
@@ -142,12 +165,14 @@ async function submit({ file, text }) {
   startClock();
   const fd = new FormData();
   if (file) fd.append('file', file); else fd.append('text', text);
+  fd.append('engine', engine);
   try {
     const res = await api('/api/review', { method: 'POST', body: fd });
     stopClock();
     state.articleId = res.article_id;
     state.runId = res.run_id;
     state.review = res.review;
+    state.estimates = res.estimates;
     renderReview();
     loadList();
   } catch (e) {
@@ -171,7 +196,7 @@ const PHASES = [
   [200, 'Still working &mdash; long articles take longer.'],
 ];
 
-function startClock() {
+function startClock(phases = PHASES) {
   const t0 = Date.now();
   stopClock();
   clockTimer = setInterval(() => {
@@ -179,7 +204,7 @@ function startClock() {
     const el = $('#workClock');
     if (!el) return stopClock();
     el.textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
-    const phase = [...PHASES].reverse().find(([at]) => s >= at);
+    const phase = [...phases].reverse().find(([at]) => s >= at);
     const p = $('#workPhase');
     if (p && phase) p.innerHTML = phase[1];
   }, 1000);
@@ -195,10 +220,11 @@ async function openRun(runId) {
   $('#s-review').innerHTML =
     '<div class="working"><span class="spinner"></span> Reopening&hellip;</div>';
   try {
-    const res = await api('/api/runs/' + runId);
+    const res = await api('/api/runs/' + runId + '?engine=' + engine);
     state.articleId = res.article_id;
     state.runId = res.run_id;
     state.review = res.review;
+    state.estimates = res.estimates;
     renderReview();
   } catch (e) {
     $('#s-review').innerHTML =
@@ -221,7 +247,7 @@ function renderReview() {
         <div class="badges">
           <span class="badge ${s >= 9 ? 'b-good' : 'b-must'}">${esc(VERDICTS[r.verdict] || r.verdict)}</span>
           <span class="badge b-neutral">${esc(r.article_type.replace(/_/g, ' '))}</span>
-          <span class="badge b-neutral mono">${esc(r.usage.model.replace('claude-', ''))} &middot; $${r.cost.toFixed(3)}${r.duration_s ? ' &middot; ' + mmss(r.duration_s) : ''}</span>
+          <span class="badge b-neutral mono">${esc(shortModel(r.usage.model))} &middot; $${r.cost.toFixed(3)}${r.duration_s ? ' &middot; ' + mmss(r.duration_s) : ''}</span>
         </div>
       </div>
     </div>
@@ -267,12 +293,17 @@ function renderReview() {
           <span class="tier-count">${items.length}</span>
         </div>
         ${items.map(f => `
-          <article class="finding${f.headline ? ' is-headline' : ''}${f.outcome && f.outcome !== 'pending' ? ' done' : ''}" data-id="${f.id}" data-tier="${f.tier}">
+          <article class="finding${f.headline ? ' is-headline' : ''}${f.outcome && f.outcome !== 'pending' ? ' done' : ''}" data-id="${f.id}" data-tier="${f.tier}" data-kind="${f.free ? 'line' : 'structural'}">
             <div class="f-num">${f.position + 1}</div>
             <div class="f-body">
               ${f.headline ? '<div class="f-flag">Start here &mdash; the biggest issue</div>' : ''}
               <div class="f-sum">${esc(f.summary)}</div>
-              <div class="f-param">${esc(f.parameter)} &middot; ${esc(f.kind)}${f.needs_validation ? ' &middot; <span class="f-val">clinician to confirm</span>' : ''}</div>
+              <div class="f-param">
+                ${f.free
+                  ? '<span class="f-cost free" title="The replacement sentence is already written; applying it is an exact swap">Swap &middot; free</span>'
+                  : `<span class="f-cost paid" title="${f.kind === 'line' ? 'The proposal is an instruction rather than the sentence itself' : "A change to the article's shape"}; ${esc(shortModel(est('rewrite').model || ''))} writes it">Rewrite &middot; ~${inr(est('rewrite').usd)}</span>`}
+                ${esc(f.parameter)}${f.needs_validation ? ' &middot; <span class="f-val">clinician to confirm</span>' : ''}
+              </div>
               <div class="ba">
                 ${f.quote
                   ? `<div class="ba-now"><b>What it says now</b><span>${esc(f.quote)}</span></div>`
@@ -295,7 +326,7 @@ function renderReview() {
       <span class="foot-status" id="tally"></span>
       <div class="topbar-actions">
         <button class="btn" id="chooseAll">Choose for me</button>
-        <button class="btn btn-primary" id="applyBtn">Apply &amp; rewrite &rarr;</button>
+        <button class="btn btn-primary" id="applyBtn">Apply &rarr;</button>
       </div>
     </div>`;
 
@@ -315,10 +346,22 @@ function wireFindings() {
     for (let i = 0; i < cards.length; i++) if (!cards[i].classList.contains('done')) return i;
     return -1;
   };
+  const accepted = () => cards.filter(c => c.querySelector('.yes').getAttribute('aria-pressed') === 'true');
   const tally = () => {
     const done = cards.filter(c => c.classList.contains('done')).length;
     const left = cards.filter(c => !c.classList.contains('done') && c.dataset.tier !== 'polish').length;
-    $('#tally').textContent = `${done} of ${cards.length} decided · ${left} remaining above polish`;
+    const acc = accepted();
+    const swaps = acc.filter(c => c.dataset.kind === 'line').length;
+    const rewrites = acc.length - swaps;
+    const cost = rewrites ? `~${inr(est('rewrite').usd)}` : 'free';
+    $('#tally').innerHTML = `${done} of ${cards.length} decided &middot; ${left} remaining above polish`
+      + (acc.length ? `<br><b>${acc.length} accepted</b> &middot; ${swaps} swap${swaps === 1 ? '' : 's'} (free)`
+        + (rewrites ? ` &middot; ${rewrites} rewrite${rewrites === 1 ? '' : 's'}` : '')
+        + ` &middot; apply cost <b>${cost}</b>` : '');
+    const btn = $('#applyBtn');
+    if (btn) btn.innerHTML = !acc.length ? 'Apply &rarr;'
+      : rewrites ? `Apply &mdash; ${rewrites} rewrite${rewrites === 1 ? '' : 's'}, ~${inr(est('rewrite').usd)} &rarr;`
+      : 'Apply &mdash; free &rarr;';
   };
   const decide = async (card, yes, advance) => {
     card.querySelectorAll('.act').forEach(a => a.setAttribute('aria-pressed', 'false'));
@@ -360,27 +403,31 @@ function wireFindings() {
   };
 
   $('#applyBtn').onclick = async () => {
-    const decided = cards.filter(c => c.classList.contains('done')).length;
-    if (!decided) return toast('Decide at least one finding first.', true);
-    const before = state.review.overall;
+    const acc = accepted();
+    if (!acc.length) return toast('Accept at least one finding first.', true);
+    const rewrites = acc.filter(c => c.dataset.kind !== 'line').length;
     go('result');
     $('#s-result').innerHTML =
       `<div class="working"><span class="spinner"></span>
          <div>
            <div id="workPhase">Applying the accepted changes&hellip;</div>
-           <div class="worknote">Two calls run back to back &mdash; the rewrite, then a fresh
-             score. Three to five minutes is normal &mdash;
+           <div class="worknote">${rewrites
+             ? `Sentence swaps go in instantly; ${esc(shortModel(est('rewrite').model || ''))} is writing the
+                ${rewrites} structural change${rewrites === 1 ? '' : 's'}. Under a minute is normal &mdash;`
+             : 'Exact sentence swaps only &mdash; this takes a moment &mdash;'}
              <span id="workClock" class="mono">0:00</span> elapsed.</div>
          </div>
        </div>`;
-    startClock();
+    startClock([[0, 'Applying the accepted changes&hellip;'],
+                [45, 'Still writing &mdash; a long new section takes longer.']]);
     try {
       const res = await api('/api/rewrite', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ run_id: state.runId })
+        body: JSON.stringify({ run_id: state.runId, engine })
       });
       stopClock();
-      renderResult(res, before);
+      state.estimates = res.estimates || state.estimates;
+      renderResult(res, state.review);
       loadList();
     } catch (e) {
       stopClock();
@@ -405,34 +452,32 @@ function wireFindings() {
 
 /* ---------------------------------------------------------------- result */
 
-function renderResult(res, before) {
-  const r = res.review, after = r.overall, d = res.diff;
-  const up = after >= before;
+function renderResult(res, review) {
+  const d = res.diff, score = review.overall;
+  const total = review.feedback.length;
+  const paid = res.edit_usage != null;
   $('#s-result').innerHTML = `
-    <h1 class="art-title" style="margin-bottom:18px">Rewritten</h1>
+    <h1 class="art-title" style="margin-bottom:18px">Applied</h1>
 
     <div class="panel">
       <h3>Result</h3>
       <div class="delta">
-        <span class="from">${before.toFixed(1)}</span>
-        <span class="arrow">&rarr;</span>
-        <span class="to" style="color:${BAND(after)}">${after.toFixed(1)}</span>
+        <span class="to" style="color:${BAND(score)}">${score.toFixed(1)}</span>
+        <span class="applied-of">${res.applied} of ${total} finding${total === 1 ? '' : 's'} applied</span>
       </div>
       <div class="diffnote">
-        ${res.applied} change${res.applied === 1 ? '' : 's'} applied &middot;
-        ${esc(VERDICTS[r.verdict] || r.verdict)} &middot;
-        ${d.words_before.toLocaleString()} &rarr; ${d.words_after.toLocaleString()} words &middot;
-        ${esc(res.edit_usage.model.replace('claude-', ''))} + ${esc(r.usage.model.replace('claude-', ''))}
-        &middot; $${res.total_cost.toFixed(3)}${res.duration_s ? ' &middot; ' + mmss(res.duration_s) : ''}
-        ${up ? '' : ' &middot; score did not improve'}
+        ${res.swapped.length} sentence swap${res.swapped.length === 1 ? '' : 's'} (free)
+        ${res.rewritten.length ? ` &middot; ${res.rewritten.length} rewrite${res.rewritten.length === 1 ? '' : 's'} by ${esc(shortModel(res.edit_usage.model))} &middot; ${inr(res.edit_cost)}` : ''}
+        &middot; ${d.words_before.toLocaleString()} &rarr; ${d.words_after.toLocaleString()} words
+        ${res.duration_s ? ' &middot; ' + mmss(res.duration_s) : ''}
+      </div>
+      <div class="rescore-note">
+        The score above is the review's. Nothing was re-read: the reviewer wrote these
+        changes, so re-scoring them buys nothing. Want a fresh number anyway?
+        <button class="btn btn-sm" id="rescoreBtn">Re-score &middot; ~${inr(est('rescore').usd)}</button>
+        <span id="rescoreArea"></span>
       </div>
     </div>
-
-    </div>
-
-    ${r.blockers.length ? `<div class="blocker"><span aria-hidden="true" style="color:var(--must)">&#9888;</span>
-      <div><div class="blocker-t">Still blocked</div>
-      <ul>${r.blockers.map(b => `<li>${esc(b)}</li>`).join('')}</ul></div></div>` : ''}
 
     <div class="panel">
       <h3>What changed &mdash; ${d.changes.length} passage${d.changes.length === 1 ? '' : 's'}</h3>
@@ -451,13 +496,24 @@ function renderResult(res, before) {
       <h3>Final article</h3>
       <div class="finalbody" id="finalBody"></div>
       <div class="footbar" style="position:static; border:0; padding-top:14px">
-        <span class="foot-status">Export, or send for clinical verification below.</span>
+        <span class="foot-status">Export, brief the images, or send for clinical verification below.</span>
         <div class="topbar-actions">
           <button class="btn" id="copyFinal">Copy text</button>
           <button class="btn" id="dlDocx">Word</button>
           <button class="btn" id="dlPdf">PDF</button>
-          <button class="btn btn-primary" id="reviewAgain">Review again</button>
         </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Images</h3>
+      <p style="margin:0 0 13px; font-size:13px; color:var(--ink-2)">
+        A brief for the cover and for up to two visuals inside the article &mdash;
+        prompts a designer or an image tool can use as they are. Prompts only; no
+        images are generated.
+      </p>
+      <div id="imagesArea">
+        <button class="btn btn-primary" id="makeImages">Write image briefs &middot; ~${inr(est('images').usd)}</button>
       </div>
     </div>
 
@@ -468,7 +524,7 @@ function renderResult(res, before) {
         clinician can sign off without reading the article.
       </p>
       <div id="sheetArea">
-        <button class="btn btn-primary" id="makeSheet">Generate verification sheet</button>
+        <button class="btn btn-primary" id="makeSheet">Generate verification sheet &middot; ~${inr(est('sheet').usd)}</button>
       </div>
     </div>`;
 
@@ -482,12 +538,76 @@ function renderResult(res, before) {
   $('#dlDocx').onclick = () => { location.href = `/api/export/${aid}.docx`; };
   $('#dlPdf').onclick = () => { location.href = `/api/export/${aid}.pdf`; };
   $('#makeSheet').onclick = () => makeSheet(aid);
-  $('#reviewAgain').onclick = () => {
-    state.runId = res.run_id;
-    state.review = r;
-    go('review');
-    renderReview();
-  };
+  $('#makeImages').onclick = () => makeImages(aid);
+  $('#rescoreBtn').onclick = () => rescore(res.version_id);
+}
+
+/* A fresh cold read of the applied version. Optional; the button says the price. */
+async function rescore(versionId) {
+  const btn = $('#rescoreBtn'), area = $('#rescoreArea');
+  btn.disabled = true;
+  area.innerHTML = '<span class="spinner"></span> Reading it again cold &mdash; about 90 seconds';
+  try {
+    const res = await api('/api/rescore', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version_id: versionId, engine })
+    });
+    const r = res.review;
+    area.innerHTML = `&rarr; <b style="color:${BAND(r.overall)}">${r.overall.toFixed(1)}</b>
+      &middot; ${esc(VERDICTS[r.verdict] || r.verdict)} &middot; ${r.feedback.length} new findings
+      &middot; ${inr(r.cost)}${r.duration_s ? ' &middot; ' + mmss(r.duration_s) : ''}
+      <button class="btn btn-sm" id="openRescore">Open</button>`;
+    $('#openRescore').onclick = () => {
+      state.runId = res.run_id; state.review = r; state.estimates = res.estimates || state.estimates;
+      go('review'); renderReview();
+    };
+    loadList();
+  } catch (e) {
+    btn.disabled = false;
+    area.innerHTML = `<span style="color:var(--must)">${esc(e.message)}</span>`;
+  }
+}
+
+/* ------------------------------------------------------------- images */
+
+function briefCard(b, label) {
+  return `
+    <div class="brief">
+      <div class="brief-head">
+        <b>${esc(label)}</b>
+        <span class="brief-type mono">${esc(b.type)}</span>
+        ${b.placement && b.type !== 'cover' ? `<span class="brief-place">under &ldquo;${esc(b.placement)}&rdquo;</span>` : ''}
+      </div>
+      <div class="brief-purpose">${esc(b.purpose)}</div>
+      <div class="brief-prompt"><span>${esc(b.prompt)}</span>
+        <button class="btn btn-sm copy-prompt" data-text="${esc(b.prompt)}">Copy prompt</button></div>
+      <div class="brief-meta"><b>Alt text</b> ${esc(b.alt_text)}</div>
+      <div class="brief-meta"><b>Avoid</b> ${esc(b.avoid)}</div>
+    </div>`;
+}
+
+function renderBriefs(area, res) {
+  area.innerHTML = `
+    ${res.cost != null ? `<div class="badges" style="margin-bottom:13px"><span class="badge b-neutral mono">${inr(res.cost)}</span></div>` : ''}
+    ${briefCard(res.cover, 'Cover')}
+    ${(res.visuals || []).map((v, i) => briefCard(v, 'Visual ' + (i + 1))).join('')}
+    ${res.note ? `<div class="brief-note">${esc(res.note)}</div>` : ''}`;
+  area.querySelectorAll('.copy-prompt').forEach(b => b.onclick = () =>
+    navigator.clipboard.writeText(b.dataset.text).then(() => toast('Prompt copied')));
+}
+
+async function makeImages(articleId) {
+  const area = $('#imagesArea');
+  area.innerHTML = '<div class="working"><span class="spinner"></span> Writing the briefs&hellip;</div>';
+  try {
+    const res = await api('/api/image-briefs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ article_id: articleId, engine })
+    });
+    renderBriefs(area, res);
+  } catch (e) {
+    area.innerHTML = `<div class="empty">Could not write the briefs: ${esc(e.message)}</div>`;
+  }
 }
 
 /* ------------------------------------------------------- verification */
@@ -498,13 +618,13 @@ async function makeSheet(articleId) {
   try {
     const res = await api('/api/doctor-sheet', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ article_id: articleId })
+      body: JSON.stringify({ article_id: articleId, engine })
     });
     const experts = res.experts || [];
     area.innerHTML = `
       <div class="badges" style="margin-bottom:13px">
         <span class="badge b-neutral">Specialty needed: <b>${esc(res.specialty)}</b></span>
-        <span class="badge b-neutral mono">$${res.cost.toFixed(3)}</span>
+        <span class="badge b-neutral mono">${inr(res.cost)}</span>
       </div>
 
       <details class="params" style="border-top:0; margin-bottom:14px">
@@ -618,17 +738,28 @@ async function openDetail(id) {
         <summary>
           <span class="caret">&rsaquo;</span>
           <span class="tr-vno mono">v${v.version_no}</span>
-          <span class="tr-what">${v.source === 'rewrite' ? 'Rewritten from accepted changes' : 'Uploaded'}</span>
+          <span class="tr-what">${v.source === 'rewrite' ? 'Applied accepted changes' + (v.note ? ' &mdash; ' + esc(v.note) : '') : 'Uploaded'}</span>
           <span class="tr-meta mono">${v.word_count.toLocaleString()} w</span>
           <span class="tr-meta">${day(v.created_at)}</span>
           ${delta}
         </summary>
         <div class="tr-body">
+          ${v.source === 'rewrite' ? `
+            <div class="tr-run">
+              <b>Applied</b> ${when(v.created_at)}
+              ${v.created_by ? `&middot; ${esc(v.created_by)}` : ''}
+              &middot; ${Number(v.cost_usd || 0) ? inr(Number(v.cost_usd)) : 'free'}
+            </div>` : ''}
+          ${v.image_briefs ? `
+            <details class="tr-sub">
+              <summary><span class="caret">&rsaquo;</span> Image briefs &mdash; cover + ${(v.image_briefs.visuals || []).length} visual${(v.image_briefs.visuals || []).length === 1 ? '' : 's'}</summary>
+              <div class="tr-briefs"></div>
+            </details>` : ''}
           ${v.runs.map(x => `
             <div class="tr-run">
               <b>${x.kind === 'review' ? 'Reviewed' : 'Re-scored'}</b> ${when(x.created_at)}
-              &middot; ${esc(x.model.replace('claude-', ''))} ${esc(x.effort)}
-              &middot; $${Number(x.cost_usd).toFixed(3)}
+              &middot; ${esc(shortModel(x.model))} ${esc(x.effort)}
+              &middot; ${inr(Number(x.cost_usd))}
               ${x.duration_s ? '&middot; ' + mmss(Number(x.duration_s)) : ''}
               &middot; ${esc(VERDICTS[x.verdict] || x.verdict)}
               ${x.actor_email ? `&middot; ${esc(x.actor_email)}` : ''}
@@ -676,7 +807,7 @@ async function openDetail(id) {
           <dt>Versions</dt><dd>${d.versions.length}</dd>
           <dt>Findings</dt><dd>${decided.all} &middot; ${decided.acc} accepted, ${decided.rej} rejected</dd>
           <dt>Sent to</dt><dd>${d.verification.length ? esc(d.verification.map(v => v.doctor_name || v.specialty).join(', ')) : 'Not yet sent'}</dd>
-          <dt>Total API cost</dt><dd class="mono">$${cost.toFixed(3)}</dd>
+          <dt>Total API cost</dt><dd class="mono">${inr(cost + d.versions.reduce((a, v) => a + Number(v.cost_usd || 0), 0))}</dd>
         </dl>
       </div>
 
@@ -714,6 +845,10 @@ async function openDetail(id) {
     // article text set as textContent, never parsed as HTML
     $('#s-detail').querySelectorAll('.tr-text').forEach((el, i) => {
       el.textContent = d.versions[i].body;
+    });
+    $('#s-detail').querySelectorAll('.tr-briefs').forEach(el => {
+      const i = [...document.querySelectorAll('#s-detail .tr-ver')].indexOf(el.closest('.tr-ver'));
+      renderBriefs(el, d.versions[i].image_briefs);
     });
 
     document.querySelectorAll('.tr-resume').forEach(b =>
@@ -844,6 +979,9 @@ function showGate(note) {
 function showApp(email) {
   document.getElementById('gate').hidden = true;
   document.getElementById('shell').hidden = false;
+  setEngine(engine);
+  document.querySelectorAll('#engineSwitch .chip').forEach(c =>
+    c.onclick = () => setEngine(c.dataset.engine));
   const who = document.getElementById('whoBtn');
   who.textContent = email;
   who.onclick = async () => {
@@ -862,6 +1000,8 @@ async function boot() {
   } catch (e) {
     return showGate('Cannot reach the server.');
   }
+
+  try { if (!localStorage.getItem('pv-engine') && cfg.engine) engine = cfg.engine; } catch (e) {}
 
   if (!cfg.require_auth) {
     const me = await (await fetch('/api/me')).json();

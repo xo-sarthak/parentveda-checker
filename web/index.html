@@ -94,6 +94,11 @@
         <textarea class="paste" id="pasteBox" placeholder="Paste the full draft here&hellip;"></textarea>
         <div class="footbar" style="position:static; border:0; padding-top:13px">
           <span class="foot-status" id="pasteCount">0 words</span>
+          <span class="engine-switch" id="engineSwitch" title="Which model reviews, rewrites and drafts the doctor sheet">
+            <span class="engine-label">Engine</span>
+            <button class="chip" data-engine="claude" aria-pressed="true">Claude</button>
+            <button class="chip" data-engine="openai" aria-pressed="false">ChatGPT</button>
+          </span>
           <button class="btn btn-primary" id="reviewPaste">Review this</button>
         </div>
       </div>

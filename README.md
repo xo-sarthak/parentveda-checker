@@ -8,7 +8,7 @@ Replaces the manual paste-into-ChatGPT loop: upload, decide, download.
 ## What it does
 
 ```
-upload ─► review ─► accept / reject ─► rewrite ─► export ─► doctor sheet ─► verified
+upload ─► review ─► accept / reject ─► apply ─► export ─► images ─► doctor sheet ─► verified
 ```
 
 - Scores against **12 weighted parameters** from the review framework. The
@@ -17,6 +17,14 @@ upload ─► review ─► accept / reject ─► rewrite ─► export ─► 
   draft substantially duplicates a published article.
 - Detects overlap against the **24 live articles** on parentveda.in.
 - Applies only the findings a human accepted — never its own opinions.
+  Sentence-level findings are exact swaps and cost nothing; only changes to
+  the article's shape go to a model. Every finding shows which it is before
+  anyone accepts it, and the Apply button says what it will cost.
+- No automatic re-score. The reviewer wrote the changes; re-reading them
+  buys nothing. A priced **Re-score** button exists for anyone who wants a
+  fresh number.
+- Writes **image briefs** — a cover and up to two in-article visuals as
+  paste-ready prompts. Prompts only; no images are generated.
 - Extracts every clinical claim, number and red flag into a one-page
   verification sheet, routed to the right expert on the roster.
 - Keeps every version, score, decision and cost, searchable, shared across the
@@ -42,17 +50,25 @@ Put these in `.env` (never committed):
 | `SUPABASE_URL` | `https://<ref>.supabase.co` |
 | `SUPABASE_ANON_KEY` | The publishable key — never the service-role key |
 | `PV_REQUIRE_AUTH` | Set to `0` to bypass Google sign-in locally |
-| `PV_MODEL_SCORE` | Defaults to `claude-opus-5` |
-| `PV_MODEL_EDIT` | Defaults to `claude-sonnet-5` |
+| `PV_ENGINE` | `claude` (default) or `openai`; the UI can switch per browser |
+| `PV_MODEL_SCORE` / `_EDIT` / `_DOCTOR` / `_IMAGES` | Claude models; default Opus 5 scores, Sonnet 5 for the rest |
+| `PV_OPENAI_MODEL_SCORE` / `_EDIT` / `_DOCTOR` / `_IMAGES` | OpenAI models; default gpt-5 scores, gpt-5.6-luna for the rest |
+| `PV_INR_RATE` | Rupees per dollar for the prices the screen shows; default 95 |
 
 ### Models
 
-Opus scores and re-scores; Sonnet applies the accepted changes and builds the
-doctor sheet. Settled by measurement — on a maternity-leave draft, only Opus
-caught three incorrect statutory entitlements. Rewriting to explicit
-instructions is the easier job and Sonnet does it well.
+Two engines, same prompts, same schema. Measured on the same draft:
 
-Roughly **$0.40–0.70 per article** end to end.
+| Step | Claude | ChatGPT |
+|---|---|---|
+| Review (scores + findings) | Opus 5 · ~$0.30 | gpt-5 · ~$0.13 |
+| Apply (structural changes only) | Sonnet 5 · ~$0.10 | gpt-5.6-luna · ~$0.005 |
+| Doctor sheet | Sonnet 5 · ~$0.05 | gpt-5.6-luna · ~$0.004 |
+| Image briefs | Sonnet 5 · ~$0.02 | gpt-5.6-luna · ~$0.001 |
+
+gpt-5 matched Opus finding for finding on the calibration article; luna
+applied a five-item brief faithfully and wrote a complete sheet. Roughly
+**$0.14 per article** on ChatGPT, **$0.45** on Claude, end to end.
 
 ## Before your first push
 

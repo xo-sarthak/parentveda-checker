@@ -1,4 +1,6 @@
 """FastAPI backend. Serves the app and the endpoints behind it."""
+import json
+import os
 import re
 import time
 from pathlib import Path
@@ -10,8 +12,8 @@ from pydantic import BaseModel
 
 from fastapi.responses import HTMLResponse, Response
 
-from app import (auth, config, content, doctor, editor, export, judge,
-                 parse, store)
+from app import (auth, config, content, doctor, editor, engines, export, images,
+                 judge, parse, store)
 
 WEB = config.ROOT / "web"
 
@@ -20,13 +22,24 @@ app = FastAPI(title="ParentVeda Article Checker")
 
 # ------------------------------------------------------------------ articles
 
+def _engine(name: str | None) -> str:
+    """Which provider a request wants. Unknown names are a client bug, not a fallback."""
+    if name is None or name == "":
+        return config.ENGINE
+    if name not in engines.ENGINES:
+        raise HTTPException(400, f"Unknown engine '{name}'.")
+    return name
+
+
 @app.post("/api/review")
 async def review(file: UploadFile | None = File(None),
                  text: str | None = Form(None),
                  title: str | None = Form(None),
                  author: str | None = Form(None),
+                 engine: str | None = Form(None),
                  who: str = Depends(auth.actor)):
     """Upload or paste an article, score it, persist everything."""
+    models = config.models(_engine(engine))
     if file is not None:
         body = parse.from_bytes(file.filename, await file.read())
     elif text:
@@ -46,7 +59,7 @@ async def review(file: UploadFile | None = File(None),
     # other request, so it runs in a worker thread instead.
     t0 = time.monotonic()
     result = await run_in_threadpool(
-        judge.review, body, content.catalogue(), config.MODELS["score"])
+        judge.review, body, content.catalogue(), models["score"])
     took = round(time.monotonic() - t0, 1)
 
     ids = store.save_review(title or parse.guess_title(body, file.filename if file else "Untitled"),
@@ -54,6 +67,7 @@ async def review(file: UploadFile | None = File(None),
                             duration_s=took)
     return {**ids,
             "review": {**_shape(result, ids["run_id"]), "duration_s": took},
+            "estimates": store.estimates(models),
             "internal_words": len(internal.split())}
 
 
@@ -64,7 +78,7 @@ def _shape(result: dict, run_id: str) -> dict:
                     "rationale, position, headline, needs_validation "
                     "from feedback where run_id=%s order by position",
                     (run_id,))
-        items = cur.fetchall()
+        items = [{**f, "free": editor.applies_free(f)} for f in cur.fetchall()]
     return {
         "overall": result["overall"],
         "verdict": result["verdict"],
@@ -150,7 +164,8 @@ def article_trail(article_id: str, who: str = Depends(auth.actor)):
             raise HTTPException(404, "No such article.")
 
         cur.execute(
-            "select id, version_no, body, word_count, source, created_at "
+            "select id, version_no, body, word_count, source, created_at, note, "
+            "created_by, cost_usd, image_briefs "
             "from versions where article_id=%s order by version_no", (article_id,))
         versions = cur.fetchall()
 
@@ -195,7 +210,7 @@ def article_trail(article_id: str, who: str = Depends(auth.actor)):
 
 
 @app.get("/api/runs/{run_id}")
-def get_run(run_id: str, who: str = Depends(auth.actor)):
+def get_run(run_id: str, engine: str | None = None, who: str = Depends(auth.actor)):
     """Reopen a past review exactly as it was, decisions and all.
 
     Everything a review produced is already stored, so this costs nothing —
@@ -223,12 +238,13 @@ def get_run(run_id: str, who: str = Depends(auth.actor)):
             "d.outcome, d.edited_text "
             "from feedback f left join decisions d on d.feedback_id = f.id "
             "where f.run_id=%s order by f.position", (run_id,))
-        feedback = cur.fetchall()
+        feedback = [{**f, "free": editor.applies_free(f)} for f in cur.fetchall()]
 
     return {
         "article_id": str(run["article_id"]),
         "run_id": str(run["id"]),
         "title": run["title"],
+        "estimates": store.estimates(config.models(_engine(engine))),
         "review": {
             "overall": float(run["overall"]),
             "verdict": run["verdict"],
@@ -287,73 +303,144 @@ def decide_all(b: BulkDecision, who: str = Depends(auth.actor)):
     return {"decided": len(rows)}
 
 
-# ------------------------------------------------------------------ rewrite
+# ------------------------------------------------------------------ apply
 
 class RewriteReq(BaseModel):
     run_id: str
+    engine: str | None = None
 
 
-@app.post("/api/rewrite")
-def rewrite(req: RewriteReq, who: str = Depends(auth.actor)):
-    """Apply the accepted findings, then re-score the result cold."""
-    accepted = store.accepted_feedback(req.run_id)
-    if not accepted:
-        raise HTTPException(400, "Nothing accepted yet — accept at least one finding.")
-
+def _run_row(run_id: str) -> dict:
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute(
             "select v.body, v.article_id, a.title from runs r "
             "join versions v on v.id = r.version_id "
-            "join articles a on a.id = v.article_id where r.id=%s", (req.run_id,))
+            "join articles a on a.id = v.article_id where r.id=%s", (run_id,))
         row = cur.fetchone()
     if not row:
         raise HTTPException(404, "No such run.")
+    return row
+
+
+@app.post("/api/rewrite")
+def rewrite(req: RewriteReq, who: str = Depends(auth.actor)):
+    """Apply the accepted findings and save the result as a new version.
+
+    Line findings are swapped in by code, free. Structural ones go to the
+    edit model. Nothing is re-scored: the reviewer proposed these exact
+    changes, so re-reading them buys nothing — the Re-score button exists
+    for anyone who wants a fresh number anyway.
+    """
+    models = config.models(_engine(req.engine))
+    accepted = store.accepted_feedback(req.run_id)
+    if not accepted:
+        raise HTTPException(400, "Nothing accepted yet — accept at least one finding.")
+    row = _run_row(req.run_id)
 
     t0 = time.monotonic()
-    result = editor.rewrite(row["body"], [dict(f) for f in accepted],
-                            model=config.MODELS["edit"])
-    edit_took = round(time.monotonic() - t0, 1)
+    result = editor.apply(row["body"], [dict(f) for f in accepted], model=models["edit"])
+    took = round(time.monotonic() - t0, 1)
 
-    t1 = time.monotonic()
-    rescore = judge.review(result["body"], catalogue=content.catalogue(),
-                           model=config.MODELS["score"])
-    score_took = round(time.monotonic() - t1, 1)
-    ids = store.save_review(row["title"], result["body"], rescore,
-                            article_id=str(row["article_id"]),
-                            kind="verify", source="rewrite", actor=who,
-                            duration_s=score_took)
+    cost = store.cost_usd(result["_usage"]) if result["_usage"] else 0.0
+    n_swap, n_model = len(result["swapped"]), len(result["rewritten"])
+    note = f"{n_swap} swap{'s' if n_swap != 1 else ''}"
+    if n_model:
+        note += f", {n_model} rewrite{'s' if n_model != 1 else ''} by {engines.short_name(models['edit'])}"
+    ids = store.save_version(str(row["article_id"]), result["body"],
+                             source="rewrite", actor=who, note=note)
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute("update versions set cost_usd=%s where id=%s", (cost, ids["version_id"]))
+        conn.commit()
 
-    edit_cost = store.cost_usd(result["_usage"])
     return {
         **ids,
         "diff": result["diff"],
         "body": result["body"],
         "applied": len(accepted),
+        "swapped": result["swapped"],
+        "rewritten": result["rewritten"],
         "edit_usage": result["_usage"],
-        "edit_cost": edit_cost,
-        "review": {**_shape(rescore, ids["run_id"]), "duration_s": score_took},
-        "duration_s": round(edit_took + score_took, 1),
-        "total_cost": round(edit_cost + store.cost_usd(rescore["_usage"]), 4),
+        "edit_cost": cost,
+        "duration_s": took,
+        "estimates": store.estimates(models),
     }
+
+
+class RescoreReq(BaseModel):
+    version_id: str
+    engine: str | None = None
+
+
+@app.post("/api/rescore")
+async def rescore(req: RescoreReq, who: str = Depends(auth.actor)):
+    """A cold read of a saved version. Optional, and priced on the button."""
+    models = config.models(_engine(req.engine))
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute("select v.body, v.article_id, a.title from versions v "
+                    "join articles a on a.id=v.article_id where v.id=%s",
+                    (req.version_id,))
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "No such version.")
+
+    t0 = time.monotonic()
+    result = await run_in_threadpool(
+        judge.review, row["body"], content.catalogue(), models["score"])
+    took = round(time.monotonic() - t0, 1)
+
+    ids = store.attach_run(req.version_id, result, actor=who, duration_s=took)
+    return {**ids, "article_id": str(row["article_id"]),
+            "review": {**_shape(result, ids["run_id"]), "duration_s": took},
+            "estimates": store.estimates(models)}
+
+
+# ------------------------------------------------------------------ image briefs
+
+class ImagesReq(BaseModel):
+    article_id: str
+    engine: str | None = None
+
+
+@app.post("/api/image-briefs")
+def image_briefs(req: ImagesReq, who: str = Depends(auth.actor)):
+    """Cover + up to two in-article visuals, as paste-ready prompts. Stored
+    on the version they were written for."""
+    row = _latest(req.article_id)
+    res = images.briefs(row["body"], row["title"],
+                        model=config.models(_engine(req.engine))["images"])
+    briefs = {k: v for k, v in res.items() if not k.startswith("_")}
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute("update versions set image_briefs=%s where id=%s",
+                    (json.dumps(briefs), row["version_id"]))
+        conn.commit()
+    return {**briefs, "version_id": str(row["version_id"]),
+            "cost": store.cost_usd(res["_usage"])}
 
 
 # ------------------------------------------------------------------ doctor sheet
 
 class SheetReq(BaseModel):
     article_id: str
+    engine: str | None = None
 
 
 def _latest(article_id: str) -> dict:
+    """The newest version of the article — an Apply result has no run of its
+    own, so this reads versions first and borrows the newest run for context."""
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "select a.title, v.body, r.article_level, r.expert_review, r.verdict "
-            "from runs r join versions v on v.id=r.version_id "
-            "join articles a on a.id=v.article_id where v.article_id=%s "
-            "order by r.created_at desc limit 1", (article_id,))
+            "select a.title, v.id as version_id, v.body, v.image_briefs "
+            "from versions v join articles a on a.id=v.article_id "
+            "where v.article_id=%s order by v.version_no desc limit 1", (article_id,))
         row = cur.fetchone()
-    if not row:
-        raise HTTPException(404, "Nothing reviewed for that article yet.")
-    return row
+        if not row:
+            raise HTTPException(404, "Nothing reviewed for that article yet.")
+        cur.execute(
+            "select r.article_level, r.expert_review, r.verdict from runs r "
+            "join versions v on v.id=r.version_id where v.article_id=%s "
+            "order by r.created_at desc limit 1", (article_id,))
+        run = cur.fetchone() or {}
+    return {**row, **run}
 
 
 @app.post("/api/doctor-sheet")
@@ -361,7 +448,8 @@ def doctor_sheet(req: SheetReq, who: str = Depends(auth.actor)):
     row = _latest(req.article_id)
     res = doctor.sheet(row["body"], row["title"],
                        {"expert_review": row["expert_review"],
-                        "article_type": None})
+                        "article_type": None},
+                       model=config.models(_engine(req.engine))["doctor"])
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute(
             "insert into verification (article_id, specialty, sheet_text) "
@@ -547,19 +635,35 @@ def add_expert(e: Expert, who: str = Depends(auth.actor)):
 
 # ------------------------------------------------------------------ the page
 
+def _asset_version() -> str:
+    """Changes whenever app.js or style.css does, so browsers never serve a
+    stale script against a new server after a deploy."""
+    import hashlib
+    h = hashlib.sha256()
+    for name in ("app.js", "style.css"):
+        h.update((WEB / name).read_bytes())
+    return h.hexdigest()[:10]
+
+
 @app.get("/")
 def index():
-    return FileResponse(WEB / "index.html")
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    v = _asset_version()
+    html = html.replace('href="/style.css"', f'href="/style.css?v={v}"')
+    html = html.replace('src="/app.js"', f'src="/app.js?v={v}"')
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/app.js")
 def appjs():
-    return FileResponse(WEB / "app.js", media_type="application/javascript")
+    return FileResponse(WEB / "app.js", media_type="application/javascript",
+                        headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
 @app.get("/style.css")
 def style():
-    return FileResponse(WEB / "style.css", media_type="text/css")
+    return FileResponse(WEB / "style.css", media_type="text/css",
+                        headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
 @app.get("/logo.png")
@@ -595,7 +699,7 @@ def refresh_content(who: str = Depends(auth.actor)):
     import hashlib
 
     before = {}
-    for name in ("ruleset", "judge", "editor", "doctor"):
+    for name in ("ruleset", "judge", "editor", "doctor", "images"):
         try:
             before[name] = hashlib.sha256(
                 content.get(name).encode()).hexdigest()[:8]
@@ -619,7 +723,8 @@ def refresh_content(who: str = Depends(auth.actor)):
 
 @app.get("/api/config")
 def client_config():
-    return auth.public_config()
+    return {**auth.public_config(),
+            "engine": config.ENGINE, "engines": config.ENGINES}
 
 
 @app.get("/api/me")
@@ -637,10 +742,12 @@ def health():
     """
     import hashlib
 
-    out: dict = {"ok": True, "models": config.MODELS, "effort": config.EFFORT}
+    out: dict = {"ok": True, "engine": config.ENGINE, "engines": config.ENGINES,
+                 "effort": config.EFFORT,
+                 "openai_key": bool(os.environ.get("OPENAI_API_KEY"))}
 
     items = {}
-    for name in ("ruleset", "judge", "editor", "doctor"):
+    for name in ("ruleset", "judge", "editor", "doctor", "images"):
         try:
             body = content.get(name)
             on_disk = content._FALLBACK[name].exists()

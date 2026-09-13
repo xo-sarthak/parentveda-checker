@@ -1,7 +1,5 @@
 """The verification sheet: what a clinician needs to sign off without reading."""
-import anthropic
-
-from app import config, content
+from app import config, content, engines
 
 # Which specialty an article type most often needs. The review's own
 # expert_review.specialty wins when it names one; this is the fallback.
@@ -40,38 +38,20 @@ def required_specialty(review: dict) -> str:
 
 def sheet(article: str, title: str, review: dict,
           model: str | None = None, effort: str | None = None) -> dict:
-    client = anthropic.Anthropic()
     model = model or config.MODELS["doctor"]
     effort = effort or config.EFFORT
 
-    system = [
-        {"type": "text",
-         "text": content.get("ruleset"),
-         "cache_control": {"type": "ephemeral"}},
-        {"type": "text",
-         "text": content.get("doctor"),
-         "cache_control": {"type": "ephemeral"}},
-    ]
-
-    with client.messages.stream(
+    resp = engines.complete(
         model=model,
+        system=[content.get("ruleset"), content.get("doctor")],
+        user=f"# ARTICLE: {title}\n\n{article}",
+        effort=effort,
         max_tokens=16000,
-        system=system,
-        messages=[{"role": "user", "content":
-                   f"# ARTICLE: {title}\n\n{article}"}],
-        thinking={"type": "adaptive"},
-        output_config={"effort": effort},
-    ) as stream:
-        resp = stream.get_final_message()
+    )
 
-    body = "".join(b.text for b in resp.content if b.type == "text").strip()
+    body = resp["text"].strip()
     return {
         "specialty": required_specialty(review),
         "body": body,
-        "_usage": {
-            "model": model, "effort": effort,
-            "in": resp.usage.input_tokens, "out": resp.usage.output_tokens,
-            "cache_write": getattr(resp.usage, "cache_creation_input_tokens", 0) or 0,
-            "cache_read": getattr(resp.usage, "cache_read_input_tokens", 0) or 0,
-        },
+        "_usage": resp["usage"],
     }

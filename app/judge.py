@@ -2,9 +2,7 @@
 import json
 from typing import Any
 
-import anthropic
-
-from app import config, content
+from app import config, content, engines
 
 PARAMS = list(config.WEIGHTS.keys())
 
@@ -154,47 +152,27 @@ def check_blockers(scores: dict, model_blockers: list[str]) -> list[str]:
 
 def review(article: str, catalogue: str = "", model: str | None = None,
            effort: str = "high") -> dict:
-    client = anthropic.Anthropic()
     model = model or config.MODELS["score"]
-
-    system = [
-        {
-            "type": "text",
-            "text": content.get("ruleset"),
-            "cache_control": {"type": "ephemeral"},
-        },
-        {
-            "type": "text",
-            "text": content.get("judge"),
-            "cache_control": {"type": "ephemeral"},
-        },
-    ]
 
     user = ""
     if catalogue:
         user += f"# PUBLISHED ARTICLE CATALOGUE\n\n{catalogue}\n\n---\n\n"
     user += f"# DRAFT ARTICLE UNDER REVIEW\n\n{article}"
 
-    with client.messages.stream(
+    resp = engines.complete(
         model=model,
+        system=[content.get("ruleset"), content.get("judge")],
+        user=user,
+        effort=effort,
         max_tokens=32000,
-        system=system,
-        messages=[{"role": "user", "content": user}],
-        thinking={"type": "adaptive"},
-        output_config={
-            "format": {"type": "json_schema", "schema": SCHEMA},
-            "effort": effort,
-        },
-    ) as stream:
-        resp = stream.get_final_message()
-
-    text = "".join(b.text for b in resp.content if b.type == "text")
-    if resp.stop_reason != "end_turn":
+        schema=SCHEMA,
+    )
+    if resp["stop"] != "end_turn":
         raise RuntimeError(
-            f"incomplete response: stop_reason={resp.stop_reason}, "
-            f"out={resp.usage.output_tokens} tokens"
+            f"incomplete response: stop_reason={resp['stop']}, "
+            f"out={resp['usage']['out']} tokens"
         )
-    data = json.loads(text)
+    data = json.loads(resp["text"])
 
     if isinstance(data.get("scores"), list):
         data["scores"] = {
@@ -208,12 +186,5 @@ def review(article: str, catalogue: str = "", model: str | None = None,
 
     data["overall"] = overall(data["scores"])
     data["blockers"] = check_blockers(data["scores"], data.get("blockers", []))
-    data["_usage"] = {
-        "model": model,
-        "effort": effort,
-        "in": resp.usage.input_tokens,
-        "out": resp.usage.output_tokens,
-        "cache_write": getattr(resp.usage, "cache_creation_input_tokens", 0) or 0,
-        "cache_read": getattr(resp.usage, "cache_read_input_tokens", 0) or 0,
-    }
+    data["_usage"] = resp["usage"]
     return data

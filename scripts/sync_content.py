@@ -35,6 +35,7 @@ SOURCES = {
     "judge": config.PROMPTS / "judge.md",
     "editor": config.PROMPTS / "editor.md",
     "doctor": config.PROMPTS / "doctor.md",
+    "images": config.PROMPTS / "images.md",
 }
 
 

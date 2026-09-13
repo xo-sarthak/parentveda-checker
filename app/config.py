@@ -19,15 +19,39 @@ def _load_env() -> None:
 
 _load_env()
 
-# Settled in Phase 1: Opus scores, Sonnet applies. Only Opus caught the
-# statutory errors in the maternity draft; rewriting to accepted instructions
-# is the easier job and Sonnet does it well.
-MODELS = {
-    "score": os.environ.get("PV_MODEL_SCORE", "claude-opus-5"),
-    "edit": os.environ.get("PV_MODEL_EDIT", "claude-sonnet-5"),
-    "doctor": os.environ.get("PV_MODEL_DOCTOR", "claude-sonnet-5"),
+# Two engines, same prompts. Which one runs is a per-request choice from the
+# UI; PV_ENGINE is only the default when the request does not say.
+#
+# Claude, settled in Phase 1: Opus scores, Sonnet applies. Only Opus caught
+# the statutory errors in the maternity draft; rewriting to accepted
+# instructions is the easier job and Sonnet does it well.
+# OpenAI, tested 13 Sep 2026 on the cradle cap draft: gpt-5 matched Opus on
+# findings at half the price; luna applied a five-item brief faithfully and
+# wrote a complete doctor sheet for under a cent. See data/calibration/.
+ENGINES = {
+    "claude": {
+        "score": os.environ.get("PV_MODEL_SCORE", "claude-opus-5"),
+        "edit": os.environ.get("PV_MODEL_EDIT", "claude-sonnet-5"),
+        "doctor": os.environ.get("PV_MODEL_DOCTOR", "claude-sonnet-5"),
+        "images": os.environ.get("PV_MODEL_IMAGES", "claude-sonnet-5"),
+    },
+    "openai": {
+        "score": os.environ.get("PV_OPENAI_MODEL_SCORE", "gpt-5"),
+        "edit": os.environ.get("PV_OPENAI_MODEL_EDIT", "gpt-5.6-luna"),
+        "doctor": os.environ.get("PV_OPENAI_MODEL_DOCTOR", "gpt-5.6-luna"),
+        "images": os.environ.get("PV_OPENAI_MODEL_IMAGES", "gpt-5.6-luna"),
+    },
 }
+ENGINE = os.environ.get("PV_ENGINE", "claude")
+if ENGINE not in ENGINES:
+    ENGINE = "claude"
+MODELS = ENGINES[ENGINE]
 EFFORT = os.environ.get("PV_EFFORT", "high")
+
+
+def models(engine: str | None) -> dict:
+    """The three models for an engine; the default engine when none is named."""
+    return ENGINES.get(engine or ENGINE, ENGINES[ENGINE])
 
 RULESET = ROOT / "corpus" / "compiled" / "parentveda-ruleset.md"
 PROMPTS = ROOT / "app" / "prompts"
