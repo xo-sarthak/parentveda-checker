@@ -150,23 +150,22 @@ def check_blockers(scores: dict, model_blockers: list[str]) -> list[str]:
     return out
 
 
-def review(article: str, catalogue: str = "", model: str | None = None,
-           effort: str = "high") -> dict:
-    model = model or config.MODELS["score"]
+MAX_TOKENS = 32000
 
+
+def parts(article: str, catalogue: str = "") -> tuple[list[str], str]:
+    """System blocks and user message — the same for an instant review and a
+    batched one, so scores stay comparable."""
     user = ""
     if catalogue:
         user += f"# PUBLISHED ARTICLE CATALOGUE\n\n{catalogue}\n\n---\n\n"
     user += f"# DRAFT ARTICLE UNDER REVIEW\n\n{article}"
+    return [content.get("ruleset"), content.get("judge")], user
 
-    resp = engines.complete(
-        model=model,
-        system=[content.get("ruleset"), content.get("judge")],
-        user=user,
-        effort=effort,
-        max_tokens=32000,
-        schema=SCHEMA,
-    )
+
+def finish(resp: dict) -> dict:
+    """Engine response → review dict: scores normalised, overall and blockers
+    computed here, usage attached."""
     if resp["stop"] != "end_turn":
         raise RuntimeError(
             f"incomplete response: stop_reason={resp['stop']}, "
@@ -188,3 +187,12 @@ def review(article: str, catalogue: str = "", model: str | None = None,
     data["blockers"] = check_blockers(data["scores"], data.get("blockers", []))
     data["_usage"] = resp["usage"]
     return data
+
+
+def review(article: str, catalogue: str = "", model: str | None = None,
+           effort: str = "high") -> dict:
+    model = model or config.MODELS["score"]
+    system, user = parts(article, catalogue)
+    resp = engines.complete(model=model, system=system, user=user, effort=effort,
+                            max_tokens=MAX_TOKENS, schema=SCHEMA)
+    return finish(resp)

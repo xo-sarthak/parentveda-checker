@@ -34,10 +34,12 @@ def cost_usd(usage: dict) -> float:
     p = PRICING.get(usage["model"])
     if not p:
         return 0.0
-    return round(
-        usage["in"] * p[0] / 1e6 + usage["out"] * p[1] / 1e6
-        + usage.get("cache_write", 0) * p[2] / 1e6
-        + usage.get("cache_read", 0) * p[3] / 1e6, 4)
+    usd = (usage["in"] * p[0] / 1e6 + usage["out"] * p[1] / 1e6
+           + usage.get("cache_write", 0) * p[2] / 1e6
+           + usage.get("cache_read", 0) * p[3] / 1e6)
+    if usage.get("batch"):
+        usd /= 2  # Batch API: half price on every token
+    return round(usd, 4)
 
 
 INR_PER_USD = float(os.environ.get("PV_INR_RATE", "95"))
@@ -113,13 +115,13 @@ def _insert_run(cur, version_id, review: dict, *, kind: str, actor: str | None,
         "insert into runs (version_id, kind, model, effort, ruleset_version, "
         "overall, verdict, blockers, article_level, expert_review, "
         "tokens_in, tokens_out, cache_write, cache_read, cost_usd, actor_email, "
-        "duration_s) "
-        "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id",
+        "duration_s, batch) "
+        "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id",
         (version_id, kind, u["model"], u.get("effort", "high"), ruleset_version(),
          review["overall"], review["verdict"], json.dumps(review["blockers"]),
          json.dumps(review["article_level"]), json.dumps(review["expert_review"]),
          u["in"], u["out"], u.get("cache_write", 0), u.get("cache_read", 0),
-         cost_usd(u), actor, duration_s))
+         cost_usd(u), actor, duration_s, bool(u.get("batch"))))
     run_id = cur.fetchone()["id"]
 
     for param, v in review["scores"].items():
@@ -143,13 +145,35 @@ def _insert_run(cur, version_id, review: dict, *, kind: str, actor: str | None,
 
 
 def attach_run(version_id: str, review: dict, *, actor: str | None,
-               duration_s: float | None) -> dict[str, Any]:
-    """A re-score: a fresh run on a version that already exists."""
+               duration_s: float | None, kind: str = "verify") -> dict[str, Any]:
+    """A run on a version that already exists — a re-score, or a batched
+    review landing on the draft that was queued."""
     with connect() as conn, conn.cursor() as cur:
-        run_id = _insert_run(cur, version_id, review, kind="verify", actor=actor,
+        run_id = _insert_run(cur, version_id, review, kind=kind, actor=actor,
                              duration_s=duration_s)
+        if kind == "review":
+            cur.execute("update articles set status='reviewed', article_type=%s, "
+                        "updated_at=now() where id=(select article_id from versions "
+                        "where id=%s)", (review.get("article_type"), version_id))
         conn.commit()
     return {"version_id": version_id, "run_id": run_id}
+
+
+def save_draft(title: str, body: str, *, author: str | None, actor: str | None) -> dict[str, Any]:
+    """An article and its first version with no review yet — what goes into
+    the queue. The review arrives later as a run on this version."""
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "insert into articles (title, author, status, created_by) "
+            "values (%s,%s,'draft',%s) returning id", (title, author, actor))
+        article_id = cur.fetchone()["id"]
+        cur.execute(
+            "insert into versions (article_id, version_no, body, word_count, source, "
+            "created_by) values (%s,1,%s,%s,'upload',%s) returning id",
+            (article_id, body, len(body.split()), actor))
+        version_id = cur.fetchone()["id"]
+        conn.commit()
+    return {"article_id": article_id, "version_id": version_id, "version_no": 1}
 
 
 def save_version(article_id: str, body: str, *, source: str, actor: str | None,

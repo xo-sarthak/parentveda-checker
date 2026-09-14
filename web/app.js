@@ -40,6 +40,36 @@ function setEngine(e) {
   try { localStorage.setItem('pv-engine', e); } catch (e2) {}
   document.querySelectorAll('#engineSwitch .chip').forEach(c =>
     c.setAttribute('aria-pressed', c.dataset.engine === e ? 'true' : 'false'));
+  if (typeof syncModeWithEngine === 'function') syncModeWithEngine();
+}
+/* When to review. The queue is ChatGPT's Batch API — half price, results
+   later. Claude has no queue here, so choosing Claude forces "now". */
+let prefMode = 'queue';                         // what the person chose
+try { prefMode = localStorage.getItem('pv-mode') || prefMode; } catch (e) {}
+let mode = prefMode;                            // what applies right now
+function setMode(m, chosen = false) {
+  mode = m;
+  if (chosen) { prefMode = m; try { localStorage.setItem('pv-mode', m); } catch (e2) {} }
+  document.querySelectorAll('#whenSwitch .when-opt').forEach(b =>
+    b.setAttribute('aria-pressed', b.dataset.mode === m ? 'true' : 'false'));
+  const btn = $('#reviewPaste');
+  if (btn) btn.textContent = m === 'queue' ? 'Queue this' : 'Review this now';
+}
+function syncModeWithEngine() {
+  const q = document.querySelector('#whenSwitch .when-opt[data-mode="queue"]');
+  if (!q) return;
+  const canQueue = engine === 'openai' && !!(window.PV_CONFIG && window.PV_CONFIG.queue);
+  q.disabled = !canQueue;
+  q.title = canQueue ? '' : (engine !== 'openai' ? 'Queueing is available with the ChatGPT engine'
+                                                 : 'The queue is not set up on this server');
+  setMode(canQueue ? prefMode : 'now');
+  /* Price the two options for the engine in use; a review's estimate is the
+     "rescore" shape, and the queue is half of it. */
+  const ests = window.PV_CONFIG && window.PV_CONFIG.estimates && window.PV_CONFIG.estimates[engine];
+  const usd = ests ? ests.rescore.usd : 0;
+  if (!state.estimates && ests) state.estimates = ests;
+  $('#queuePrice').textContent = canQueue ? approx(usd / 2) + ' · half price' : 'ChatGPT only';
+  $('#nowPrice').textContent = approx(usd);
 }
 function shortModel(m) { return (m || '').replace('claude-', ''); }
 
@@ -97,19 +127,29 @@ async function loadList() {
       list.innerHTML = '<div class="empty">Nothing here yet.<br>Upload an article to begin.</div>';
       return;
     }
+    const hhmm = t => new Date(t).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true });
+    const inQueue = a => a.score == null && ['queued', 'submitted'].includes(a.queue_status);
+    const queueFailed = a => a.score == null && a.queue_status === 'failed' && !/instantly/.test(a.queue_error || '');
     list.innerHTML = rows.map(a => `
       <button class="item" data-id="${a.id}">
         <div class="item-top">
           <span class="item-title">${esc(a.title)}</span>
-          ${a.score != null ? `<span class="item-score mono" style="color:${BAND(a.score)}">${a.score}</span>` : ''}
+          ${a.score != null ? `<span class="item-score mono" style="color:${BAND(a.score)}">${a.score}</span>`
+            : inQueue(a) ? '<span class="item-queued" title="In the queue" aria-hidden="true">&#9203;</span>' : ''}
         </div>
         <div class="item-meta">
-          <span class="dot" style="background:${a.score != null ? BAND(a.score) : 'var(--line-2)'}"></span>
-          <span>${esc(VERDICTS[a.verdict] || a.status)}</span>
+          <span class="dot" style="background:${a.score != null ? BAND(a.score) : inQueue(a) ? 'var(--should)' : 'var(--line-2)'}"></span>
+          <span>${inQueue(a) ? (a.queue_status === 'submitted' ? 'Being reviewed &middot; queued ' : 'In queue since ') + hhmm(a.queued_at)
+                  : queueFailed(a) ? 'Queue failed &mdash; review now'
+                  : esc(VERDICTS[a.verdict] || a.status)}</span>
           ${a.words ? `<span>&middot;</span><span>${a.words.toLocaleString()} w</span>` : ''}
           <span>&middot;</span><span>${new Date(a.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>
         </div>
       </button>`).join('');
+    /* While anything is in the queue, check back every minute so the row
+       flips to a score without anyone reloading. */
+    clearTimeout(listTimer);
+    if (rows.some(inQueue)) listTimer = setTimeout(loadList, 60000);
     list.querySelectorAll('.item').forEach(b => b.onclick = () => {
       list.querySelectorAll('.item').forEach(i => i.removeAttribute('aria-current'));
       b.setAttribute('aria-current', 'true');
@@ -118,7 +158,7 @@ async function loadList() {
   } catch (e) { toast('Could not load articles: ' + e.message, true); }
 }
 
-let searchTimer;
+let searchTimer, listTimer;
 $('#search').oninput = e => {
   clearTimeout(searchTimer);
   state.q = e.target.value.trim();
@@ -154,8 +194,11 @@ $('#reviewPaste').onclick = () => {
   if (text.split(/\s+/).length < 120) return toast('That is too short to review.', true);
   submit({ text });
 };
+document.querySelectorAll('#whenSwitch .when-opt').forEach(b =>
+  b.onclick = () => { if (!b.disabled) setMode(b.dataset.mode, true); });
 
 async function submit({ file, text }) {
+  if (mode === 'queue' && engine === 'openai') return queueSubmit({ file, text });
   go('review');
   $('#s-review').innerHTML =
     `<div class="working"><span class="spinner"></span>
@@ -186,6 +229,69 @@ async function submit({ file, text }) {
        <div><div class="blocker-t">Review failed</div>
        <div style="font-size:12.5px; color:var(--ink-2)">${esc(e.message)}</div></div></div>
        <button class="btn" onclick="location.reload()">Start again</button>`;
+  }
+}
+
+/* ---------------------------------------------------------------- queue */
+
+async function queueSubmit({ file, text }) {
+  const fd = new FormData();
+  if (file) fd.append('file', file); else fd.append('text', text);
+  go('review', 'Queued');
+  $('#s-review').innerHTML = '<div class="working"><span class="spinner"></span> Adding to the queue&hellip;</div>';
+  try {
+    const res = await api('/api/queue', { method: 'POST', body: fd });
+    const t = new Date(res.queued_at).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true });
+    $('#s-review').innerHTML = `
+      <div class="queued-done">
+        <div style="font-size:34px; margin-bottom:6px" aria-hidden="true">&#9203;</div>
+        <h2>In the queue</h2>
+        <p><b>${esc(res.title)}</b><br>Queued at ${t}. Usually ready within the hour, always by
+          tomorrow morning. It sits under <b>In queue</b> in the list and moves to
+          <b>Needs review</b> on its own &mdash; you don't need to keep this page open.</p>
+        <div class="topbar-actions" style="justify-content:center">
+          <button class="btn btn-primary" id="qAnother">Upload another</button>
+          <button class="btn" id="qNow">Review it now instead &middot; ${approx(est('rescore').usd)}</button>
+        </div>
+      </div>`;
+    $('#pasteBox').value = ''; $('#pasteCount').textContent = '0 words';
+    $('#qAnother').onclick = () => go('new');
+    $('#qNow').onclick = () => reviewQueuedNow(res.article_id);
+    loadList();
+  } catch (e) {
+    $('#s-review').innerHTML =
+      `<div class="blocker"><span style="color:var(--must)">&#9888;</span>
+       <div><div class="blocker-t">Could not queue it</div>
+       <div style="font-size:12.5px; color:var(--ink-2)">${esc(e.message)}</div></div></div>
+       <button class="btn" onclick="go('new')">Back</button>`;
+  }
+}
+
+/* Pull an article out of the queue and review it instantly. Only works while
+   it is still waiting — once sent to OpenAI it is on its way anyway. */
+async function reviewQueuedNow(articleId) {
+  go('review');
+  $('#s-review').innerHTML =
+    `<div class="working"><span class="spinner"></span>
+       <div><div id="workPhase">Reading against the ParentVeda Bible&hellip;</div>
+       <div class="worknote">About 90 seconds &mdash; <span id="workClock" class="mono">0:00</span> elapsed.</div></div>
+     </div>`;
+  startClock();
+  try {
+    const res = await api('/api/queue/now', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ article_id: articleId })
+    });
+    stopClock();
+    state.articleId = res.article_id; state.runId = res.run_id;
+    state.review = res.review; state.estimates = res.estimates;
+    renderReview(); loadList();
+  } catch (e) {
+    stopClock();
+    $('#s-review').innerHTML =
+      `<div class="blocker"><span style="color:var(--must)">&#9888;</span>
+       <div><div class="blocker-t">Could not review it now</div>
+       <div style="font-size:12.5px; color:var(--ink-2)">${esc(e.message)}</div></div></div>`;
   }
 }
 
@@ -251,7 +357,7 @@ function renderReview() {
         <div class="badges">
           <span class="badge ${s >= 9 ? 'b-good' : 'b-must'}">${esc(VERDICTS[r.verdict] || r.verdict)}</span>
           <span class="badge b-neutral">${esc(r.article_type.replace(/_/g, ' '))}</span>
-          <span class="badge b-neutral mono">${esc(shortModel(r.usage.model))} &middot; $${r.cost.toFixed(3)}${r.duration_s ? ' &middot; ' + mmss(r.duration_s) : ''}</span>
+          <span class="badge b-neutral mono">${esc(shortModel(r.usage.model))}${r.usage.batch ? ' &middot; queued' : ''} &middot; ${inr(r.cost)}${r.duration_s && !r.usage.batch ? ' &middot; ' + mmss(r.duration_s) : ''}</span>
         </div>
       </div>
     </div>
@@ -486,10 +592,8 @@ function renderResult(res, review) {
         ${res.duration_s ? ' &middot; ' + mmss(res.duration_s) : ''}
       </div>
       <div class="rescore-note">
-        The score above is the review's. Nothing was re-read: the reviewer wrote these
-        changes, so re-scoring them buys nothing. Want a fresh number anyway?
-        <button class="btn btn-sm" id="rescoreBtn">Re-score &middot; ${approx(est('rescore').usd)}</button>
-        <span id="rescoreArea"></span>
+        The score is the review's. Nothing was re-read &mdash; the reviewer wrote these
+        changes, so the article now reads as it asked.
       </div>
     </div>
 
@@ -553,33 +657,6 @@ function renderResult(res, review) {
   $('#dlPdf').onclick = () => { location.href = `/api/export/${aid}.pdf`; };
   $('#makeSheet').onclick = () => makeSheet(aid);
   $('#makeImages').onclick = () => makeImages(aid);
-  $('#rescoreBtn').onclick = () => rescore(res.version_id);
-}
-
-/* A fresh cold read of the applied version. Optional; the button says the price. */
-async function rescore(versionId) {
-  const btn = $('#rescoreBtn'), area = $('#rescoreArea');
-  btn.disabled = true;
-  area.innerHTML = '<span class="spinner"></span> Reading it again cold &mdash; about 90 seconds';
-  try {
-    const res = await api('/api/rescore', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ version_id: versionId, engine })
-    });
-    const r = res.review;
-    area.innerHTML = `&rarr; <b style="color:${BAND(r.overall)}">${r.overall.toFixed(1)}</b>
-      &middot; ${esc(VERDICTS[r.verdict] || r.verdict)} &middot; ${r.feedback.length} new findings
-      &middot; ${inr(r.cost)}${r.duration_s ? ' &middot; ' + mmss(r.duration_s) : ''}
-      <button class="btn btn-sm" id="openRescore">Open</button>`;
-    $('#openRescore').onclick = () => {
-      state.runId = res.run_id; state.review = r; state.estimates = res.estimates || state.estimates;
-      go('review'); renderReview();
-    };
-    loadList();
-  } catch (e) {
-    btn.disabled = false;
-    area.innerHTML = `<span style="color:var(--must)">${esc(e.message)}</span>`;
-  }
 }
 
 /* ------------------------------------------------------------- images */
@@ -695,6 +772,7 @@ async function makeSheet(articleId) {
 
 /* ---------------------------------------------------------------- detail */
 
+let detailTimer;
 async function openDetail(id) {
   go('detail');
   $('#s-detail').innerHTML =
@@ -772,9 +850,9 @@ async function openDetail(id) {
           ${v.runs.map(x => `
             <div class="tr-run">
               <b>${x.kind === 'review' ? 'Reviewed' : 'Re-scored'}</b> ${when(x.created_at)}
-              &middot; ${esc(shortModel(x.model))} ${esc(x.effort)}
+              &middot; ${esc(shortModel(x.model))} ${esc(x.effort)}${x.batch ? ' &middot; queued (half price)' : ''}
               &middot; ${inr(Number(x.cost_usd))}
-              ${x.duration_s ? '&middot; ' + mmss(Number(x.duration_s)) : ''}
+              ${x.duration_s && !x.batch ? '&middot; ' + mmss(Number(x.duration_s)) : ''}
               &middot; ${esc(VERDICTS[x.verdict] || x.verdict)}
               ${x.actor_email ? `&middot; ${esc(x.actor_email)}` : ''}
               ${(x.blockers || []).length ? `<div class="tr-block">${x.blockers.map(b => esc(b)).join('<br>')}</div>` : ''}
@@ -805,8 +883,33 @@ async function openDetail(id) {
       </details>`;
     };
 
+    const qs = d.queue && d.queue.status;
+    const qWaiting = qs === 'queued' || qs === 'submitted';
+    const qFailed = qs === 'failed' && !/instantly/.test(d.queue.error || '') && !last;
+    const queuePanel = qWaiting ? `
+      <div class="queued-panel">
+        <span aria-hidden="true" style="font-size:20px">&#9203;</span>
+        <div>
+          <div class="qp-t">${qs === 'submitted' ? 'Being reviewed' : 'In the queue'}</div>
+          <p>Queued ${when(d.queue.created_at)}${d.queue.submitted_at ? ' &middot; sent ' + when(d.queue.submitted_at) : ''}.
+             Usually ready within the hour, always by tomorrow morning. This page updates on its own.</p>
+        </div>
+        <div class="qp-acts">
+          ${qs === 'queued' ? `<button class="btn" id="qNowDetail">Review now instead &middot; ${approx(est('rescore').usd)}</button>` : ''}
+        </div>
+      </div>` : qFailed ? `
+      <div class="queued-panel" style="border-color:var(--must); background:var(--must-bg)">
+        <span aria-hidden="true" style="font-size:20px; color:var(--must)">&#9888;</span>
+        <div>
+          <div class="qp-t" style="color:var(--must)">The queue could not review this one</div>
+          <p>${esc(d.queue.error || 'No result came back.')} Nothing was charged. Review it now instead.</p>
+        </div>
+        <div class="qp-acts"><button class="btn btn-primary" id="qNowDetail">Review now &middot; ${approx(est('rescore').usd)}</button></div>
+      </div>` : '';
+
     $('#s-detail').innerHTML = `
       <h1 class="art-title">${esc(d.article.title)}</h1>
+      ${queuePanel}
       <div class="badges" style="margin:9px 0 22px">
         <span class="badge ${last && last.overall >= 9 ? 'b-good' : 'b-neutral'}">${esc(d.article.status.replace(/_/g, ' '))}</span>
         ${d.article.article_type ? `<span class="badge b-neutral">${esc(d.article.article_type.replace(/_/g, ' '))}</span>` : ''}
@@ -860,6 +963,12 @@ async function openDetail(id) {
     $('#s-detail').querySelectorAll('.tr-text').forEach((el, i) => {
       el.textContent = d.versions[i].body;
     });
+    const qn = $('#qNowDetail');
+    if (qn) qn.onclick = () => reviewQueuedNow(id);
+    clearTimeout(detailTimer);
+    if (qWaiting) detailTimer = setTimeout(() => {
+      if ($('#s-detail').classList.contains('on')) openDetail(id);
+    }, 60000);
     $('#s-detail').querySelectorAll('.tr-briefs').forEach(el => {
       const i = [...document.querySelectorAll('#s-detail .tr-ver')].indexOf(el.closest('.tr-ver'));
       renderBriefs(el, d.versions[i].image_briefs);
@@ -996,6 +1105,7 @@ function showApp(email) {
   setEngine(engine);
   document.querySelectorAll('#engineSwitch .chip').forEach(c =>
     c.onclick = () => setEngine(c.dataset.engine));
+  syncModeWithEngine();
   const who = document.getElementById('whoBtn');
   who.textContent = email;
   who.onclick = async () => {
@@ -1015,6 +1125,7 @@ async function boot() {
     return showGate('Cannot reach the server.');
   }
 
+  window.PV_CONFIG = cfg;
   try { if (!localStorage.getItem('pv-engine') && cfg.engine) engine = cfg.engine; } catch (e) {}
 
   if (!cfg.require_auth) {

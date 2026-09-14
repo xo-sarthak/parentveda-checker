@@ -25,6 +25,12 @@ upload ─► review ─► accept / reject ─► apply ─► export ─► im
   fresh number.
 - Writes **image briefs** — a cover and up to two in-article visuals as
   paste-ready prompts. Prompts only; no images are generated.
+- **Queue or review now.** Queued articles go through OpenAI's Batch API at
+  half price — usually back within minutes, always within a day — and land
+  in the list as ordinary reviews. Nobody has to keep a tab open. ChatGPT only.
+- **Shadow judge.** Every queued article is also reviewed by a cheaper model
+  in the same batch. Stored, never shown; `python scripts/shadow_report.py`
+  says whether the cheap model could take over.
 - Extracts every clinical claim, number and red flag into a one-page
   verification sheet, routed to the right expert on the roster.
 - Keeps every version, score, decision and cost, searchable, shared across the
@@ -54,6 +60,9 @@ Put these in `.env` (never committed):
 | `PV_MODEL_SCORE` / `_EDIT` / `_DOCTOR` / `_IMAGES` | Claude models; default Opus 5 scores, Sonnet 5 for the rest |
 | `PV_OPENAI_MODEL_SCORE` / `_EDIT` / `_DOCTOR` / `_IMAGES` | OpenAI models; default gpt-5 scores, gpt-5.6-luna for the rest |
 | `PV_INR_RATE` | Rupees per dollar for the prices the screen shows; default 95 |
+| `PV_BATCH_TICK` | Seconds between queue passes; default 300 |
+| `PV_BATCH_LOOP` | `0` disables the background queue loop (local testing) |
+| `PV_SHADOW_MODEL` | Second model reviewed in every batch; default `gpt-5.6-luna`, empty to disable |
 
 ### Models
 

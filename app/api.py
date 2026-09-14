@@ -12,12 +12,22 @@ from pydantic import BaseModel
 
 from fastapi.responses import HTMLResponse, Response
 
-from app import (auth, config, content, doctor, editor, engines, export, images,
-                 judge, parse, store)
+from app import (auth, batch, config, content, doctor, editor, engines, export,
+                 images, judge, parse, store)
 
 WEB = config.ROOT / "web"
 
 app = FastAPI(title="ParentVeda Article Checker")
+
+
+@app.on_event("startup")
+async def _start_batch_loop():
+    """The queue's heartbeat: submits, polls and ingests every few minutes.
+    Needs the OpenAI key; without it the queue simply never moves and the
+    UI says so."""
+    import asyncio
+    if batch.enabled() and os.environ.get("PV_BATCH_LOOP", "1") != "0":
+        asyncio.create_task(batch.loop())
 
 
 # ------------------------------------------------------------------ articles
@@ -31,15 +41,8 @@ def _engine(name: str | None) -> str:
     return name
 
 
-@app.post("/api/review")
-async def review(file: UploadFile | None = File(None),
-                 text: str | None = Form(None),
-                 title: str | None = Form(None),
-                 author: str | None = Form(None),
-                 engine: str | None = Form(None),
-                 who: str = Depends(auth.actor)):
-    """Upload or paste an article, score it, persist everything."""
-    models = config.models(_engine(engine))
+async def _incoming(file, text, title) -> tuple[str, str, str]:
+    """(title, reviewable body, internal tail) from an upload or a paste."""
     if file is not None:
         body = parse.from_bytes(file.filename, await file.read())
     elif text:
@@ -54,6 +57,20 @@ async def review(file: UploadFile | None = File(None),
 
     if len(body.split()) < 120:
         raise HTTPException(400, "That looks too short to review — under 120 words.")
+    return (title or parse.guess_title(body, file.filename if file else "Untitled"),
+            body, internal)
+
+
+@app.post("/api/review")
+async def review(file: UploadFile | None = File(None),
+                 text: str | None = Form(None),
+                 title: str | None = Form(None),
+                 author: str | None = Form(None),
+                 engine: str | None = Form(None),
+                 who: str = Depends(auth.actor)):
+    """Upload or paste an article, score it now, persist everything."""
+    models = config.models(_engine(engine))
+    title, body, internal = await _incoming(file, text, title)
 
     # judge.review blocks for minutes. On the event loop that freezes every
     # other request, so it runs in a worker thread instead.
@@ -62,13 +79,71 @@ async def review(file: UploadFile | None = File(None),
         judge.review, body, content.catalogue(), models["score"])
     took = round(time.monotonic() - t0, 1)
 
-    ids = store.save_review(title or parse.guess_title(body, file.filename if file else "Untitled"),
-                            body, result, author=author, actor=who,
+    ids = store.save_review(title, body, result, author=author, actor=who,
                             duration_s=took)
     return {**ids,
             "review": {**_shape(result, ids["run_id"]), "duration_s": took},
             "estimates": store.estimates(models),
             "internal_words": len(internal.split())}
+
+
+# ------------------------------------------------------------------ queue (batched)
+
+@app.post("/api/queue")
+async def queue_article(file: UploadFile | None = File(None),
+                        text: str | None = Form(None),
+                        title: str | None = Form(None),
+                        author: str | None = Form(None),
+                        who: str = Depends(auth.actor)):
+    """Upload into the batch queue. Half price; the review arrives later —
+    usually within the hour, always within a day. ChatGPT only."""
+    if not batch.enabled():
+        raise HTTPException(503, "The queue needs the OpenAI key on the server.")
+    title, body, internal = await _incoming(file, text, title)
+    out = batch.enqueue(title, body, author=author, actor=who)
+    return {**out, "title": title, "internal_words": len(internal.split()),
+            "estimate_usd": round(store.estimate_usd(out["model"], "rescore") / 2, 4)}
+
+
+@app.get("/api/queue/{article_id}")
+def queue_status(article_id: str, who: str = Depends(auth.actor)):
+    row = batch.status_for(article_id)
+    if not row:
+        raise HTTPException(404, "That article was never queued.")
+    return row
+
+
+class QueueNow(BaseModel):
+    article_id: str
+
+
+@app.post("/api/queue/now")
+async def queue_now(req: QueueNow, who: str = Depends(auth.actor)):
+    """Pull a still-waiting article out of the queue and review it instantly."""
+    row = batch.pull_out(req.article_id)
+    if not row:
+        raise HTTPException(409, "Too late — it has already been sent to OpenAI. "
+                                 "It will be ready soon.")
+    models = config.models("openai")
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute("select body from versions where id=%s", (row["version_id"],))
+        body = cur.fetchone()["body"]
+    t0 = time.monotonic()
+    result = await run_in_threadpool(judge.review, body, content.catalogue(), models["score"])
+    took = round(time.monotonic() - t0, 1)
+    ids = store.attach_run(str(row["version_id"]), result, actor=who,
+                           duration_s=took, kind="review")
+    return {**ids, "article_id": req.article_id,
+            "review": {**_shape(result, ids["run_id"]), "duration_s": took},
+            "estimates": store.estimates(models)}
+
+
+@app.post("/api/queue/tick")
+def queue_tick(who: str = Depends(auth.actor)):
+    """Run one pass of the queue now instead of waiting for the next tick."""
+    if not batch.enabled():
+        raise HTTPException(503, "The queue needs the OpenAI key on the server.")
+    return batch.tick()
 
 
 def _shape(result: dict, run_id: str) -> dict:
@@ -107,13 +182,21 @@ def articles(q: str = "", status: str = "", limit: int = 50,
                "  (select word_count from versions v where v.article_id=a.id",
                "   order by version_no desc limit 1) as words,",
                "  (select verdict from runs r join versions v on v.id=r.version_id",
-               "   where v.article_id=a.id order by r.created_at desc limit 1) as verdict",
-               "from articles a where true"]
+               "   where v.article_id=a.id order by r.created_at desc limit 1) as verdict,",
+               "  qi.status as queue_status, qi.created_at as queued_at,",
+               "  qi.submitted_at, qi.error as queue_error",
+               "from articles a",
+               "left join lateral (select status, created_at, submitted_at, error",
+               "   from queue_items where article_id=a.id",
+               "   order by created_at desc limit 1) qi on true",
+               "where true"]
         args: list = []
         if q:
             sql.append("and (a.title ilike %s or a.topic ilike %s)")
             args += [f"%{q}%", f"%{q}%"]
-        if status:
+        if status == "queued":
+            sql.append("and qi.status in ('queued','submitted')")
+        elif status:
             sql.append("and a.status = %s")
             args.append(status)
         sql.append("order by a.created_at desc limit %s")
@@ -171,7 +254,8 @@ def article_trail(article_id: str, who: str = Depends(auth.actor)):
 
         cur.execute(
             "select r.id, r.version_id, r.kind, r.model, r.effort, r.overall, "
-            "r.verdict, r.cost_usd, r.actor_email, r.created_at, r.blockers, r.duration_s "
+            "r.verdict, r.cost_usd, r.actor_email, r.created_at, r.blockers, r.duration_s, "
+            "r.batch "
             "from runs r join versions v on v.id = r.version_id "
             "where v.article_id=%s order by r.created_at", (article_id,))
         runs = cur.fetchall()
@@ -191,6 +275,8 @@ def article_trail(article_id: str, who: str = Depends(auth.actor)):
                     "order by created_at", (article_id,))
         verification = cur.fetchall()
 
+    queue = batch.status_for(article_id)
+
     by_run: dict = {}
     for f in feedback:
         by_run.setdefault(str(f["run_id"]), []).append(f)
@@ -206,7 +292,8 @@ def article_trail(article_id: str, who: str = Depends(auth.actor)):
     for v in versions:
         v["runs"] = by_version.get(str(v["id"]), [])
 
-    return {"article": art, "versions": versions, "verification": verification}
+    return {"article": art, "versions": versions, "verification": verification,
+            "queue": queue}
 
 
 @app.get("/api/runs/{run_id}")
@@ -220,7 +307,7 @@ def get_run(run_id: str, engine: str | None = None, who: str = Depends(auth.acto
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute(
             "select r.id, r.kind, r.model, r.effort, r.overall, r.verdict, "
-            "r.blockers, r.article_level, r.expert_review, r.cost_usd, "
+            "r.blockers, r.article_level, r.expert_review, r.cost_usd, r.batch, "
             "r.duration_s, r.created_at, v.article_id, v.word_count, a.title "
             "from runs r join versions v on v.id = r.version_id "
             "join articles a on a.id = v.article_id where r.id=%s", (run_id,))
@@ -259,7 +346,7 @@ def get_run(run_id: str, engine: str | None = None, who: str = Depends(auth.acto
                 for p, v in scores.items()
             ],
             "feedback": feedback,
-            "usage": {"model": run["model"], "effort": run["effort"]},
+            "usage": {"model": run["model"], "effort": run["effort"], "batch": run["batch"]},
             "cost": float(run["cost_usd"] or 0),
             "duration_s": float(run["duration_s"]) if run["duration_s"] else None,
             "reopened": True,
@@ -724,7 +811,9 @@ def refresh_content(who: str = Depends(auth.actor)):
 @app.get("/api/config")
 def client_config():
     return {**auth.public_config(),
-            "engine": config.ENGINE, "engines": config.ENGINES}
+            "engine": config.ENGINE, "engines": config.ENGINES,
+            "queue": batch.enabled(),
+            "estimates": {e: store.estimates(m) for e, m in config.ENGINES.items()}}
 
 
 @app.get("/api/me")
@@ -770,6 +859,10 @@ def health():
             out["articles"] = cur.fetchone()["n"]
             cur.execute("select count(*) as n from experts where onboarded")
             out["experts_onboarded"] = cur.fetchone()["n"]
+            cur.execute("select status, count(*) as n from queue_items "
+                        "where status in ('queued','submitted') group by status")
+            out["queue"] = {r["status"]: r["n"] for r in cur.fetchall()}
+            out["batch_loop"] = batch.enabled() and os.environ.get("PV_BATCH_LOOP", "1") != "0"
         out["database"] = "connected"
     except Exception as exc:
         out["ok"] = False

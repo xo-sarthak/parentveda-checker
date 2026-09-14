@@ -56,6 +56,7 @@
 
     <div class="filters" id="filters">
       <button class="chip" aria-pressed="true" data-status="">All</button>
+      <button class="chip" aria-pressed="false" data-status="queued">In queue</button>
       <button class="chip" aria-pressed="false" data-status="reviewed">Needs review</button>
       <button class="chip" aria-pressed="false" data-status="sent_for_verification">Awaiting doctor</button>
       <button class="chip" aria-pressed="false" data-status="verified">Verified</button>
@@ -83,9 +84,22 @@
 
     <!-- new -->
     <section class="stage screen on" id="s-new">
+      <div class="when" id="whenSwitch">
+        <button class="when-opt" data-mode="queue" aria-pressed="true">
+          <b>Queue it</b>
+          <span class="when-price" id="queuePrice">half price</span>
+          <small>Usually ready within the hour; always by tomorrow morning. Shows up under
+            <em>In queue</em>, then moves to <em>Needs review</em>.</small>
+        </button>
+        <button class="when-opt" data-mode="now" aria-pressed="false">
+          <b>Review now</b>
+          <span class="when-price" id="nowPrice">full price</span>
+          <small>About 90 seconds. Use it when someone is waiting on the answer.</small>
+        </button>
+      </div>
       <div class="drop" id="dropZone">
         <h2>Drop an article, or paste it below</h2>
-        <p>.docx, .md or plain text &middot; scored against the ParentVeda Bible in about a minute</p>
+        <p>.docx, .md or plain text &middot; scored against the ParentVeda Bible</p>
         <button class="btn btn-primary" id="pickFile">Choose file</button>
         <input type="file" id="fileInput" accept=".docx,.md,.txt" hidden>
       </div>
