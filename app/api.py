@@ -105,6 +105,28 @@ async def queue_article(file: UploadFile | None = File(None),
             "estimate_usd": round(store.estimate_usd(out["model"], "rescore") / 2, 4)}
 
 
+@app.get("/api/queue")
+def queue_overview(who: str = Depends(auth.actor)):
+    """Every queue run with its articles — the Queue screen."""
+    return batch.overview()
+
+
+class Requeue(BaseModel):
+    batch_id: str | None = None
+    article_ids: list[str] | None = None
+
+
+@app.post("/api/queue/requeue")
+async def queue_requeue(req: Requeue, who: str = Depends(auth.actor)):
+    """Failed items back into the queue, then send straight away rather than
+    waiting for the next tick."""
+    if not batch.enabled():
+        raise HTTPException(503, "The queue needs the OpenAI key on the server.")
+    n = batch.requeue(req.article_ids, req.batch_id)
+    sent = await run_in_threadpool(batch.submit) if n else None
+    return {"requeued": n, "sent": sent}
+
+
 @app.get("/api/queue/{article_id}")
 def queue_status(article_id: str, who: str = Depends(auth.actor)):
     row = batch.status_for(article_id)
@@ -278,6 +300,12 @@ def article_trail(article_id: str, who: str = Depends(auth.actor)):
         verification = cur.fetchall()
 
     queue = batch.status_for(article_id)
+    if queue and queue["status"] == "failed":
+        with store.connect() as conn, conn.cursor() as cur:
+            cur.execute("select count(*) as n from queue_items q where q.status='failed' "
+                        "and q.error is distinct from 'reviewed instantly instead' "
+                        "and q.article_id <> %s", (article_id,))
+            queue = dict(queue, other_failed=cur.fetchone()["n"])
 
     by_run: dict = {}
     for f in feedback:

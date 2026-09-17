@@ -29,6 +29,9 @@ const inr = usd => {
 /* "~₹11" for a real number; "under ₹1" is already approximate, no tilde. */
 const approx = usd => { const t = inr(usd); return t.startsWith('\u20b9') ? '~' + t : t; };
 const est = job => (state.estimates && state.estimates[job]) || { usd: 0, inr: 0 };
+/* The queue is ChatGPT-only, so anything priced on a queue screen uses the
+   ChatGPT estimates whatever engine the browser has selected. */
+const qEst = job => (((window.PV_CONFIG || {}).estimates || {}).openai || {})[job] || est(job);
 
 /* Which provider scores, rewrites and drafts the sheet. Per browser, so two
    people can compare engines on the same article without touching config. */
@@ -97,10 +100,10 @@ async function api(path, opts = {}) {
 }
 
 function go(key, label) {
-  ['new', 'review', 'result', 'detail', 'experts'].forEach(k =>
+  ['new', 'review', 'result', 'detail', 'experts', 'queue'].forEach(k =>
     $('#s-' + k).classList.toggle('on', k === key));
   $('#crumb').textContent = label ||
-    { new: 'New', review: 'Review', result: 'Result', detail: 'History', experts: 'Experts' }[key];
+    { new: 'New', review: 'Review', result: 'Result', detail: 'History', experts: 'Experts', queue: 'Queue' }[key];
   $('.main').scrollTop = 0;
 }
 
@@ -170,6 +173,7 @@ $('#filters').querySelectorAll('.chip').forEach(c => c.onclick = () => {
   c.setAttribute('aria-pressed', 'true');
   state.filter = c.dataset.status;
   loadList();
+  if (c.dataset.status === 'queued') openQueue();
 });
 
 /* ---------------------------------------------------------------- upload */
@@ -252,7 +256,7 @@ async function queueSubmit({ file, text }) {
           <b>Needs review</b> on its own &mdash; you don't need to keep this page open.</p>
         <div class="topbar-actions" style="justify-content:center">
           <button class="btn btn-primary" id="qAnother">Upload another</button>
-          <button class="btn" id="qNow">Review this one now instead &middot; ${approx(est('rescore').usd)}</button>
+          <button class="btn" id="qNow">Review this one now instead &middot; ${approx(qEst('rescore').usd)}</button>
         </div>
       </div>`;
     $('#pasteBox').value = ''; $('#pasteCount').textContent = '0 words';
@@ -293,6 +297,92 @@ async function reviewQueuedNow(articleId) {
       `<div class="blocker"><span style="color:var(--must)">&#9888;</span>
        <div><div class="blocker-t">Could not review it now</div>
        <div style="font-size:12.5px; color:var(--ink-2)">${esc(e.message)}</div></div></div>`;
+  }
+}
+
+/* ------------------------------------------------------------ queue screen */
+
+let queueTimer;
+async function openQueue() {
+  go('queue');
+  $('#s-queue').innerHTML = '<div class="working"><span class="spinner"></span> Loading the queue&hellip;</div>';
+  try {
+    const d = await api('/api/queue');
+    const when = t => new Date(t).toLocaleString('en-IN',
+      { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true });
+    const STATUS = {
+      done: ['Reviewed', 'var(--good)'], submitted: ['Being reviewed', 'var(--should)'],
+      failed: ['Failed', 'var(--must)'], queued: ['Waiting', 'var(--should)'],
+    };
+    const itemRow = it => `
+      <button class="q-item" data-id="${it.article_id}">
+        <span class="q-dot" style="background:${(STATUS[it.status] || STATUS.queued)[1]}"></span>
+        <span class="q-title">${esc(it.title)}</span>
+        <span class="q-state">${it.status === 'done' && it.overall != null
+          ? `<b class="mono" style="color:${BAND(it.overall)}">${it.overall.toFixed(2)}</b>`
+          : esc((STATUS[it.status] || STATUS.queued)[0])}</span>
+        ${it.status === 'failed' && it.error ? `<span class="q-err">${esc(it.error)}</span>` : ''}
+      </button>`;
+
+    const runBlock = r => {
+      const failedAll = r.failed && !r.done && !r.pending;
+      const head = r.pending ? 'Being reviewed' : failedAll ? 'Failed' : r.failed ? 'Partly failed' : 'Done';
+      const colour = r.pending ? 'var(--should)' : r.failed ? 'var(--must)' : 'var(--good)';
+      return `
+      <details class="q-run" ${r.failed || r.pending ? 'open' : ''}>
+        <summary>
+          <span class="caret">&rsaquo;</span>
+          <b style="color:${colour}">${head}</b>
+          <span>&middot; sent ${when(r.created_at)}</span>
+          <span>&middot; ${r.items.length} article${r.items.length === 1 ? '' : 's'}</span>
+          ${r.done ? `<span>&middot; ${r.done} reviewed</span>` : ''}
+          ${r.failed ? `<span style="color:var(--must)">&middot; ${r.failed} failed</span>` : ''}
+          ${r.failed ? `<button class="btn btn-primary btn-sm q-requeue" data-batch="${r.id}">
+              Send ${r.failed === r.items.length ? 'all' : 'the ' + r.failed} back to the queue &middot; ${approx(qEst('rescore').usd / 2)} each</button>` : ''}
+        </summary>
+        <div class="q-items">${r.items.map(itemRow).join('')}</div>
+      </details>`;
+    };
+
+    $('#s-queue').innerHTML = `
+      <h1 class="art-title" style="margin-bottom:6px">Queue</h1>
+      <p style="margin:0 0 18px; font-size:13px; color:var(--ink-2)">
+        Every send to the queue, newest first. Each article is reviewed on its own and
+        priced on its own; a send just groups what was waiting at that moment.
+        Usually back within the hour, always by the next morning.</p>
+
+      ${d.waiting.length ? `
+        <div class="q-run q-waiting">
+          <div class="q-run-head"><b style="color:var(--should)">Waiting to be sent</b>
+            <span>&middot; ${d.waiting.length} article${d.waiting.length === 1 ? '' : 's'} &middot; goes in the next few minutes</span>
+            <button class="btn btn-sm" id="qSendNow">Send now</button></div>
+          <div class="q-items">${d.waiting.map(itemRow).join('')}</div>
+        </div>` : ''}
+
+      ${d.runs.length ? d.runs.map(runBlock).join('')
+        : '<div class="empty">Nothing has been queued yet. Choose <b>Queue it</b> on the New article screen.</div>'}`;
+
+    $('#s-queue').querySelectorAll('.q-item').forEach(b => b.onclick = () => openDetail(b.dataset.id));
+    $('#s-queue').querySelectorAll('.q-requeue').forEach(b => b.onclick = async e => {
+      e.preventDefault(); b.disabled = true;
+      try {
+        const out = await api('/api/queue/requeue', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ batch_id: b.dataset.batch }) });
+        toast(`${out.requeued} sent back to the queue`); loadList(); openQueue();
+      } catch (err) { b.disabled = false; toast('Could not re-queue: ' + err.message, true); }
+    });
+    const sn = $('#qSendNow');
+    if (sn) sn.onclick = async () => {
+      sn.disabled = true;
+      try { await api('/api/queue/tick', { method: 'POST' }); toast('Sent'); openQueue(); }
+      catch (err) { sn.disabled = false; toast('Could not send: ' + err.message, true); }
+    };
+
+    clearTimeout(queueTimer);
+    if (d.waiting.length || d.runs.some(r => r.pending))
+      queueTimer = setTimeout(() => { if ($('#s-queue').classList.contains('on')) openQueue(); }, 60000);
+  } catch (e) {
+    $('#s-queue').innerHTML = `<div class="empty">Could not load the queue: ${esc(e.message)}</div>`;
   }
 }
 
@@ -896,16 +986,21 @@ async function openDetail(id) {
              Usually ready within the hour, always by tomorrow morning. This page updates on its own.</p>
         </div>
         <div class="qp-acts">
-          ${qs === 'queued' ? `<button class="btn" id="qNowDetail">Review this one now &middot; ${approx(est('rescore').usd)}</button>` : ''}
+          ${qs === 'queued' ? `<button class="btn" id="qNowDetail">Review this one now &middot; ${approx(qEst('rescore').usd)}</button>` : ''}
         </div>
       </div>` : qFailed ? `
       <div class="queued-panel" style="border-color:var(--must); background:var(--must-bg)">
         <span aria-hidden="true" style="font-size:20px; color:var(--must)">&#9888;</span>
         <div>
           <div class="qp-t" style="color:var(--must)">The queue could not review this one</div>
-          <p>${esc(d.queue.error || 'No result came back.')} Nothing was charged. Review it now instead.</p>
+          <p>${esc(d.queue.error || 'No result came back.')} Nothing was charged.
+             ${d.queue.other_failed ? `<b>${d.queue.other_failed} other article${d.queue.other_failed === 1 ? '' : 's'}</b> failed in the queue too &mdash;
+             <a href="#" id="qOpenQueue">open the Queue</a> to send them all back in one go.` : ''}</p>
         </div>
-        <div class="qp-acts"><button class="btn btn-primary" id="qNowDetail">Review this one now &middot; ${approx(est('rescore').usd)}</button></div>
+        <div class="qp-acts">
+          <button class="btn btn-primary" id="qRequeueDetail">Send back to the queue &middot; ${approx(qEst('rescore').usd / 2)}</button>
+          <button class="btn" id="qNowDetail">Review this one now &middot; ${approx(qEst('rescore').usd)}</button>
+        </div>
       </div>` : '';
 
     $('#s-detail').innerHTML = `
@@ -966,6 +1061,17 @@ async function openDetail(id) {
     });
     const qn = $('#qNowDetail');
     if (qn) qn.onclick = () => reviewQueuedNow(id);
+    const qr = $('#qRequeueDetail');
+    if (qr) qr.onclick = async () => {
+      qr.disabled = true;
+      try {
+        await api('/api/queue/requeue', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ article_ids: [id] }) });
+        toast('Back in the queue and sent'); loadList(); openDetail(id);
+      } catch (e) { qr.disabled = false; toast('Could not re-queue: ' + e.message, true); }
+    };
+    const qo = $('#qOpenQueue');
+    if (qo) qo.onclick = e => { e.preventDefault(); openQueue(); };
     clearTimeout(detailTimer);
     if (qWaiting) detailTimer = setTimeout(() => {
       if ($('#s-detail').classList.contains('on')) openDetail(id);
@@ -1084,6 +1190,7 @@ async function openExperts() {
 
 document.querySelectorAll('[data-goto]').forEach(b => b.onclick = () => {
   if (b.dataset.goto === 'experts') return openExperts();
+  if (b.dataset.goto === 'queue') return openQueue();
   go(b.dataset.goto);
 });
 document.onkeydown = e => {

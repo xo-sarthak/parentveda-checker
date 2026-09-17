@@ -82,6 +82,56 @@ def pull_out(article_id: str) -> dict | None:
     return row
 
 
+def overview() -> dict:
+    """Every queue run, newest first, with the articles in it — what the
+    Queue screen shows. Items not yet sent form their own group."""
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "select q.id, q.article_id, a.title, q.status, q.error, q.attempts, q.created_at, "
+            "q.submitted_at, q.completed_at, q.batch_id, "
+            "(select overall from runs r where r.version_id=q.version_id and r.kind='review' "
+            " order by r.created_at desc limit 1) as overall "
+            "from queue_items q join articles a on a.id=q.article_id "
+            "where q.error is distinct from 'reviewed instantly instead' "
+            "order by q.created_at desc limit 500")
+        items = cur.fetchall()
+        cur.execute("select id, openai_id, status, n_items, created_at, completed_at, error "
+                    "from batches where kind='main' order by created_at desc limit 200")
+        batches = {str(b["id"]): dict(b, items=[]) for b in cur.fetchall()}
+    waiting = []
+    for it in items:
+        it["overall"] = float(it["overall"]) if it["overall"] is not None else None
+        bid = str(it["batch_id"]) if it["batch_id"] else None
+        if bid and bid in batches:
+            batches[bid]["items"].append(it)
+        else:
+            waiting.append(it)
+    runs = [b for b in batches.values() if b["items"]]
+    for b in runs:
+        st = [i["status"] for i in b["items"]]
+        b["done"] = st.count("done")
+        b["failed"] = st.count("failed")
+        b["pending"] = st.count("submitted")
+    return {"waiting": waiting, "runs": runs}
+
+
+def requeue(article_ids: list[str] | None = None, batch_id: str | None = None) -> int:
+    """Put failed items back in the queue. By batch, by article, or all."""
+    with store.connect() as conn, conn.cursor() as cur:
+        sql = ("update queue_items set status='queued', batch_id=null, shadow_batch_id=null, "
+               "submitted_at=null, completed_at=null, attempts=0, error=null "
+               "where status='failed' and error is distinct from 'reviewed instantly instead'")
+        args: list = []
+        if batch_id:
+            sql += " and batch_id=%s"; args.append(batch_id)
+        if article_ids:
+            sql += " and article_id = any(%s)"; args.append(article_ids)
+        cur.execute(sql, args)
+        n = cur.rowcount
+        conn.commit()
+    return n
+
+
 # ------------------------------------------------------------------ submit
 
 def _create_batch(client, lines: list[str], kind: str, n: int):
