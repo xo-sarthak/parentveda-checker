@@ -58,3 +58,9 @@ create index if not exists shadow_reviews_version_idx on shadow_reviews (version
 -- OpenAI allows one model per batch: the shadow judge gets its own.
 alter table batches add column if not exists kind text not null default 'main';   -- main | shadow
 alter table queue_items add column if not exists shadow_batch_id uuid references batches(id);
+
+-- A human-readable identity for each queue send: "Queue #3".
+alter table batches add column if not exists seq int;
+update batches b set seq = s.n from (
+  select id, row_number() over (order by created_at) as n from batches where kind='main'
+) s where s.id = b.id and b.seq is null;

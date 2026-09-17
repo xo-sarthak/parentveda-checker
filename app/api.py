@@ -208,11 +208,13 @@ def articles(q: str = "", status: str = "", limit: int = 50,
                "  (select batch from runs r join versions v on v.id=r.version_id",
                "   where v.article_id=a.id and r.kind='review' order by r.created_at desc limit 1) as batch,",
                "  qi.status as queue_status, qi.created_at as queued_at,",
-               "  qi.submitted_at, qi.error as queue_error",
+               "  qi.submitted_at, qi.error as queue_error, qi.seq as queue_seq,",
+               "  qi.sent_at as queue_sent_at",
                "from articles a",
-               "left join lateral (select status, created_at, submitted_at, error",
-               "   from queue_items where article_id=a.id",
-               "   order by created_at desc limit 1) qi on true",
+               "left join lateral (select q.status, q.created_at, q.submitted_at, q.error,",
+               "   b.seq, b.created_at as sent_at",
+               "   from queue_items q left join batches b on b.id=q.batch_id",
+               "   where q.article_id=a.id order by q.created_at desc limit 1) qi on true",
                "where true"]
         args: list = []
         if q:

@@ -56,15 +56,15 @@ function setMode(m, chosen = false) {
   document.querySelectorAll('#whenSwitch .when-opt').forEach(b =>
     b.setAttribute('aria-pressed', b.dataset.mode === m ? 'true' : 'false'));
   const btn = $('#reviewPaste');
-  if (btn) btn.textContent = m === 'queue' ? 'Queue this' : 'Review this now';
+  if (btn) btn.textContent = m === 'queue' ? 'Add to next batch' : 'Review now';
 }
 function syncModeWithEngine() {
   const q = document.querySelector('#whenSwitch .when-opt[data-mode="queue"]');
   if (!q) return;
   const canQueue = engine === 'openai' && !!(window.PV_CONFIG && window.PV_CONFIG.queue);
   q.disabled = !canQueue;
-  q.title = canQueue ? '' : (engine !== 'openai' ? 'Queueing is available with the ChatGPT engine'
-                                                 : 'The queue is not set up on this server');
+  q.title = canQueue ? '' : (engine !== 'openai' ? 'Batching is available with the ChatGPT engine'
+                                                 : 'Batching is not set up on this server');
   setMode(canQueue ? prefMode : 'now');
   /* Price the two options for the engine in use; a review's estimate is the
      "rescore" shape, and the queue is half of it. */
@@ -103,7 +103,7 @@ function go(key, label) {
   ['new', 'review', 'result', 'detail', 'experts', 'queue'].forEach(k =>
     $('#s-' + k).classList.toggle('on', k === key));
   $('#crumb').textContent = label ||
-    { new: 'New', review: 'Review', result: 'Result', detail: 'History', experts: 'Experts', queue: 'Queue' }[key];
+    { new: 'New', review: 'Review', result: 'Result', detail: 'History', experts: 'Experts', queue: 'Batches' }[key];
   $('.main').scrollTop = 0;
 }
 
@@ -133,8 +133,23 @@ async function loadList() {
     const hhmm = t => new Date(t).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true });
     const inQueue = a => a.score == null && ['queued', 'submitted'].includes(a.queue_status);
     const queueFailed = a => a.score == null && a.queue_status === 'failed' && !/instantly/.test(a.queue_error || '');
-    list.innerHTML = rows.map(a => `
-      <button class="item" data-id="${a.id}">
+    /* Rows that went through the same queue send sit under one header, so
+       the send is a visible thing with a name, not something to infer. */
+    const dayTime = t => new Date(t).toLocaleString('en-IN',
+      { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true });
+    let lastSeq = null;
+    const header = a => {
+      const seq = a.queue_seq || null;
+      if (seq === lastSeq) return '';
+      lastSeq = seq;
+      if (!seq) return '';
+      const st = inQueue(a) ? (a.queue_status === 'submitted' ? 'reviewing' : 'waiting')
+               : queueFailed(a) ? 'failed' : 'reviewed';
+      return `<button class="item-group" data-seq="${seq}" title="Open this batch">
+        Batch #${seq} &middot; sent ${dayTime(a.queue_sent_at || a.queued_at)}${st ? ' &middot; ' + st : ''}</button>`;
+    };
+    list.innerHTML = rows.map(a => header(a) + `
+      <button class="item${a.queue_seq ? ' in-group' : ''}" data-id="${a.id}">
         <div class="item-top">
           <span class="item-title">${esc(a.title)}</span>
           ${a.score != null ? `<span class="item-score mono" style="color:${BAND(a.score)}">${a.score}</span>`
@@ -142,10 +157,10 @@ async function loadList() {
         </div>
         <div class="item-meta">
           <span class="dot" style="background:${a.score != null ? BAND(a.score) : inQueue(a) ? 'var(--should)' : 'var(--line-2)'}"></span>
-          <span>${inQueue(a) ? (a.queue_status === 'submitted' ? 'Being reviewed &middot; queued ' : 'In queue since ') + hhmm(a.queued_at)
-                  : queueFailed(a) ? 'Queue failed &mdash; review now'
+          <span>${inQueue(a) ? (a.queue_status === 'submitted' ? 'Reviewing &middot; Batch #' + (a.queue_seq || '?') : 'Waiting for next batch &middot; since ' + hhmm(a.queued_at))
+                  : queueFailed(a) ? 'Batch failed &mdash; send again'
                   : esc(VERDICTS[a.verdict] || a.status)}</span>
-          ${a.score != null && a.batch != null ? `<span class="item-tag ${a.batch ? 't-queue' : 't-now'}" title="${a.batch ? 'Reviewed through the queue (half price)' : 'Reviewed instantly'}">${a.batch ? 'queue' : 'now'}</span>` : ''}
+          ${a.score != null && a.batch != null ? `<span class="item-tag ${a.batch ? 't-queue' : 't-now'}" title="${a.batch ? 'Reviewed in Batch #' + (a.queue_seq || '?') + ' (half price)' : 'Reviewed instantly, outside any batch'}">${a.batch ? 'batch #' + (a.queue_seq || '?') : 'instant'}</span>` : ''}
           ${a.words ? `<span>&middot;</span><span>${a.words.toLocaleString()} w</span>` : ''}
           <span>&middot;</span><span>${new Date(a.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>
         </div>
@@ -159,6 +174,7 @@ async function loadList() {
       b.setAttribute('aria-current', 'true');
       openDetail(b.dataset.id);
     });
+    list.querySelectorAll('.item-group').forEach(b => b.onclick = () => openQueue(b.dataset.seq));
   } catch (e) { toast('Could not load articles: ' + e.message, true); }
 }
 
@@ -242,18 +258,19 @@ async function submit({ file, text }) {
 async function queueSubmit({ file, text }) {
   const fd = new FormData();
   if (file) fd.append('file', file); else fd.append('text', text);
-  go('review', 'Queued');
-  $('#s-review').innerHTML = '<div class="working"><span class="spinner"></span> Adding to the queue&hellip;</div>';
+  go('review', 'Added to batch');
+  $('#s-review').innerHTML = '<div class="working"><span class="spinner"></span> Adding to the next batch&hellip;</div>';
   try {
     const res = await api('/api/queue', { method: 'POST', body: fd });
     const t = new Date(res.queued_at).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true });
     $('#s-review').innerHTML = `
       <div class="queued-done">
         <div style="font-size:34px; margin-bottom:6px" aria-hidden="true">&#9203;</div>
-        <h2>In the queue</h2>
-        <p><b>${esc(res.title)}</b><br>Queued at ${t}. Usually ready within the hour, always by
-          tomorrow morning. It sits under <b>In queue</b> in the list and moves to
-          <b>Needs review</b> on its own &mdash; you don't need to keep this page open.</p>
+        <h2>Added to the next batch</h2>
+        <p><b>${esc(res.title)}</b><br>Added at ${t}. The batch goes out within a few minutes;
+          the review is usually back within the hour, always by tomorrow morning. It shows as
+          <b>Waiting for next batch</b>, then <b>Reviewing</b>, then moves to <b>Needs review</b>
+          on its own &mdash; you don't need to keep this page open.</p>
         <div class="topbar-actions" style="justify-content:center">
           <button class="btn btn-primary" id="qAnother">Upload another</button>
           <button class="btn" id="qNow">Review this one now instead &middot; ${approx(qEst('rescore').usd)}</button>
@@ -266,7 +283,7 @@ async function queueSubmit({ file, text }) {
   } catch (e) {
     $('#s-review').innerHTML =
       `<div class="blocker"><span style="color:var(--must)">&#9888;</span>
-       <div><div class="blocker-t">Could not queue it</div>
+       <div><div class="blocker-t">Could not add it to the batch</div>
        <div style="font-size:12.5px; color:var(--ink-2)">${esc(e.message)}</div></div></div>
        <button class="btn" onclick="go('new')">Back</button>`;
   }
@@ -303,15 +320,15 @@ async function reviewQueuedNow(articleId) {
 /* ------------------------------------------------------------ queue screen */
 
 let queueTimer;
-async function openQueue() {
+async function openQueue(focusSeq) {
   go('queue');
-  $('#s-queue').innerHTML = '<div class="working"><span class="spinner"></span> Loading the queue&hellip;</div>';
+  $('#s-queue').innerHTML = '<div class="working"><span class="spinner"></span> Loading batches&hellip;</div>';
   try {
     const d = await api('/api/queue');
     const when = t => new Date(t).toLocaleString('en-IN',
       { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true });
     const STATUS = {
-      done: ['Reviewed', 'var(--good)'], submitted: ['Being reviewed', 'var(--should)'],
+      done: ['Reviewed', 'var(--good)'], submitted: ['Reviewing', 'var(--should)'],
       failed: ['Failed', 'var(--must)'], queued: ['Waiting', 'var(--should)'],
     };
     const itemRow = it => `
@@ -326,49 +343,51 @@ async function openQueue() {
 
     const runBlock = r => {
       const failedAll = r.failed && !r.done && !r.pending;
-      const head = r.pending ? 'Being reviewed' : failedAll ? 'Failed' : r.failed ? 'Partly failed' : 'Done';
+      const head = r.pending ? 'Reviewing' : failedAll ? 'Failed' : r.failed ? 'Partly failed' : 'Reviewed';
       const colour = r.pending ? 'var(--should)' : r.failed ? 'var(--must)' : 'var(--good)';
       return `
-      <details class="q-run" ${r.failed || r.pending ? 'open' : ''}>
+      <details class="q-run" id="q-run-${r.seq}" ${r.failed || r.pending || String(r.seq) === String(focusSeq) ? 'open' : ''}>
         <summary>
           <span class="caret">&rsaquo;</span>
+          <b class="q-name">Batch #${r.seq}</b>
           <b style="color:${colour}">${head}</b>
           <span>&middot; sent ${when(r.created_at)}</span>
           <span>&middot; ${r.items.length} article${r.items.length === 1 ? '' : 's'}</span>
           ${r.done ? `<span>&middot; ${r.done} reviewed</span>` : ''}
           ${r.failed ? `<span style="color:var(--must)">&middot; ${r.failed} failed</span>` : ''}
           ${r.failed ? `<button class="btn btn-primary btn-sm q-requeue" data-batch="${r.id}">
-              Send ${r.failed === r.items.length ? 'all' : 'the ' + r.failed} back to the queue &middot; ${approx(qEst('rescore').usd / 2)} each</button>` : ''}
+              Send ${r.failed === r.items.length ? 'the whole batch' : 'the ' + r.failed + ' failed'} again &middot; ${approx(qEst('rescore').usd / 2)} each</button>` : ''}
         </summary>
         <div class="q-items">${r.items.map(itemRow).join('')}</div>
       </details>`;
     };
 
     $('#s-queue').innerHTML = `
-      <h1 class="art-title" style="margin-bottom:6px">Queue</h1>
+      <h1 class="art-title" style="margin-bottom:6px">Batches</h1>
       <p style="margin:0 0 18px; font-size:13px; color:var(--ink-2)">
-        Every send to the queue, newest first. Each article is reviewed on its own and
-        priced on its own; a send just groups what was waiting at that moment.
-        Usually back within the hour, always by the next morning.</p>
+        Every batch, newest first. A batch is the group of articles that were waiting when it
+        went out; each article inside it is reviewed and priced on its own. Usually back
+        within the hour, always by the next morning.</p>
 
       ${d.waiting.length ? `
         <div class="q-run q-waiting">
-          <div class="q-run-head"><b style="color:var(--should)">Waiting to be sent</b>
-            <span>&middot; ${d.waiting.length} article${d.waiting.length === 1 ? '' : 's'} &middot; goes in the next few minutes</span>
-            <button class="btn btn-sm" id="qSendNow">Send now</button></div>
+          <div class="q-run-head"><b style="color:var(--should)">Waiting for next batch</b>
+            <span>&middot; ${d.waiting.length} article${d.waiting.length === 1 ? '' : 's'} &middot; goes out in the next few minutes</span>
+            <button class="btn btn-sm" id="qSendNow">Send the batch now</button></div>
           <div class="q-items">${d.waiting.map(itemRow).join('')}</div>
         </div>` : ''}
 
       ${d.runs.length ? d.runs.map(runBlock).join('')
-        : '<div class="empty">Nothing has been queued yet. Choose <b>Queue it</b> on the New article screen.</div>'}`;
+        : '<div class="empty">No batches yet. Choose <b>Add to next batch</b> on the New article screen.</div>'}`;
 
     $('#s-queue').querySelectorAll('.q-item').forEach(b => b.onclick = () => openDetail(b.dataset.id));
+    if (focusSeq) { const el = $('#q-run-' + focusSeq); if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
     $('#s-queue').querySelectorAll('.q-requeue').forEach(b => b.onclick = async e => {
       e.preventDefault(); b.disabled = true;
       try {
         const out = await api('/api/queue/requeue', { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ batch_id: b.dataset.batch }) });
-        toast(`${out.requeued} sent back to the queue`); loadList(); openQueue();
+        toast(`${out.requeued} sent again`); loadList(); openQueue();
       } catch (err) { b.disabled = false; toast('Could not re-queue: ' + err.message, true); }
     });
     const sn = $('#qSendNow');
@@ -382,7 +401,7 @@ async function openQueue() {
     if (d.waiting.length || d.runs.some(r => r.pending))
       queueTimer = setTimeout(() => { if ($('#s-queue').classList.contains('on')) openQueue(); }, 60000);
   } catch (e) {
-    $('#s-queue').innerHTML = `<div class="empty">Could not load the queue: ${esc(e.message)}</div>`;
+    $('#s-queue').innerHTML = `<div class="empty">Could not load batches: ${esc(e.message)}</div>`;
   }
 }
 
@@ -448,7 +467,7 @@ function renderReview() {
         <div class="badges">
           <span class="badge ${s >= 9 ? 'b-good' : 'b-must'}">${esc(VERDICTS[r.verdict] || r.verdict)}</span>
           <span class="badge b-neutral">${esc(r.article_type.replace(/_/g, ' '))}</span>
-          <span class="badge b-neutral mono">${esc(shortModel(r.usage.model))}${r.usage.batch ? ' &middot; queued' : ''} &middot; ${inr(r.cost)}${r.duration_s && !r.usage.batch ? ' &middot; ' + mmss(r.duration_s) : ''}</span>
+          <span class="badge b-neutral mono">${esc(shortModel(r.usage.model))}${r.usage.batch ? ' &middot; via batch' : ' &middot; instant'} &middot; ${inr(r.cost)}${r.duration_s && !r.usage.batch ? ' &middot; ' + mmss(r.duration_s) : ''}</span>
         </div>
       </div>
     </div>
@@ -941,7 +960,7 @@ async function openDetail(id) {
           ${v.runs.map(x => `
             <div class="tr-run">
               <b>${x.kind === 'review' ? 'Reviewed' : 'Re-scored'}</b> ${when(x.created_at)}
-              &middot; ${esc(shortModel(x.model))} ${esc(x.effort)}${x.batch ? ' &middot; queued (half price)' : ''}
+              &middot; ${esc(shortModel(x.model))} ${esc(x.effort)}${x.batch ? ' &middot; Batch #' + (d.queue && d.queue.seq || '?') + ' (half price)' : ' &middot; instant'}
               &middot; ${inr(Number(x.cost_usd))}
               ${x.duration_s && !x.batch ? '&middot; ' + mmss(Number(x.duration_s)) : ''}
               &middot; ${esc(VERDICTS[x.verdict] || x.verdict)}
@@ -981,9 +1000,10 @@ async function openDetail(id) {
       <div class="queued-panel">
         <span aria-hidden="true" style="font-size:20px">&#9203;</span>
         <div>
-          <div class="qp-t">${qs === 'submitted' ? 'Being reviewed' : 'In the queue'}</div>
-          <p>Queued ${when(d.queue.created_at)}${d.queue.submitted_at ? ' &middot; sent ' + when(d.queue.submitted_at) : ''}.
-             Usually ready within the hour, always by tomorrow morning. This page updates on its own.</p>
+          <div class="qp-t">${qs === 'submitted' ? `Reviewing &middot; Batch #${d.queue.seq}` : 'Waiting for next batch'}</div>
+          <p>Queued ${when(d.queue.created_at)}${d.queue.submitted_at ? ' &middot; sent ' + when(d.queue.submitted_at)
+              + (d.queue.batch_size > 1 ? ` with ${d.queue.batch_size - 1} other article${d.queue.batch_size === 2 ? '' : 's'}` : '') : ''}.
+             Usually reviewed within the hour, always by tomorrow morning. This page updates on its own.</p>
         </div>
         <div class="qp-acts">
           ${qs === 'queued' ? `<button class="btn" id="qNowDetail">Review this one now &middot; ${approx(qEst('rescore').usd)}</button>` : ''}
@@ -992,15 +1012,15 @@ async function openDetail(id) {
       <div class="queued-panel" style="border-color:var(--must); background:var(--must-bg)">
         <span aria-hidden="true" style="font-size:20px; color:var(--must)">&#9888;</span>
         <div>
-          <div class="qp-t" style="color:var(--must)">The queue could not review this one</div>
+          <div class="qp-t" style="color:var(--must)">Batch #${d.queue.seq || '?'} failed${d.queue.batch_size > 1 ? ` &mdash; ${d.queue.batch_size} articles` : ''}</div>
           <p>${esc(d.queue.error || 'No result came back.')} Nothing was charged.
-             ${d.queue.other_failed ? `<b>${d.queue.other_failed} other article${d.queue.other_failed === 1 ? '' : 's'}</b> failed in the queue too
-             (<a href="#" id="qOpenQueue">see the Queue</a>).` : ''}</p>
+             ${d.queue.other_failed ? `<b>${d.queue.other_failed} other article${d.queue.other_failed === 1 ? '' : 's'}</b> failed in the same batch
+             (<a href="#" id="qOpenQueue">see the batch</a>).` : ''}</p>
         </div>
         <div class="qp-acts">
           <button class="btn btn-primary" id="qRequeueDetail">${d.queue.other_failed
-            ? `Send all ${d.queue.other_failed + 1} back to the queue &middot; ${approx(qEst('rescore').usd / 2)} each`
-            : `Send back to the queue &middot; ${approx(qEst('rescore').usd / 2)}`}</button>
+            ? `Send the whole batch again (${d.queue.other_failed + 1} articles) &middot; ${approx(qEst('rescore').usd / 2)} each`
+            : `Send again in the next batch &middot; ${approx(qEst('rescore').usd / 2)}`}</button>
           <button class="btn" id="qNowDetail">Review this one now &middot; ${approx(qEst('rescore').usd)}</button>
         </div>
       </div>` : '';
@@ -1070,7 +1090,7 @@ async function openDetail(id) {
         const all = !!(d.queue && d.queue.other_failed);   // every failed article, not just this one
         const out = await api('/api/queue/requeue', { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(all ? {} : { article_ids: [id] }) });
-        toast(`${out.requeued} back in the queue and sent`); loadList(); openDetail(id);
+        toast(`${out.requeued} sent again`); loadList(); openDetail(id);
       } catch (e) { qr.disabled = false; toast('Could not re-queue: ' + e.message, true); }
     };
     const qo = $('#qOpenQueue');

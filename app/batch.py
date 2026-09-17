@@ -62,8 +62,9 @@ def status_for(article_id: str) -> dict | None:
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute(
             "select q.id, q.status, q.attempts, q.error, q.created_at, q.submitted_at, "
-            "q.completed_at, q.model, b.openai_id from queue_items q "
-            "left join batches b on b.id = q.batch_id "
+            "q.completed_at, q.model, b.openai_id, b.seq, b.created_at as sent_at, "
+            "(select count(*) from queue_items x where x.batch_id=q.batch_id) as batch_size "
+            "from queue_items q left join batches b on b.id = q.batch_id "
             "where q.article_id=%s order by q.created_at desc limit 1", (article_id,))
         return cur.fetchone()
 
@@ -95,7 +96,7 @@ def overview() -> dict:
             "where q.error is distinct from 'reviewed instantly instead' "
             "order by q.created_at desc limit 500")
         items = cur.fetchall()
-        cur.execute("select id, openai_id, status, n_items, created_at, completed_at, error "
+        cur.execute("select id, openai_id, status, n_items, created_at, completed_at, error, seq "
                     "from batches where kind='main' order by created_at desc limit 200")
         batches = {str(b["id"]): dict(b, items=[]) for b in cur.fetchall()}
     waiting = []
@@ -142,8 +143,10 @@ def _create_batch(client, lines: list[str], kind: str, n: int):
                               metadata={"app": "parentveda-checker", "kind": kind, "n": str(n)})
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "insert into batches (openai_id, status, input_file_id, n_items, kind) "
-            "values (%s,%s,%s,%s,%s) returning id", (b.id, b.status, f.id, n, kind))
+            "insert into batches (openai_id, status, input_file_id, n_items, kind, seq) "
+            "values (%s,%s,%s,%s,%s, case when %s='main' then "
+            "(select coalesce(max(seq),0)+1 from batches where kind='main') end) returning id",
+            (b.id, b.status, f.id, n, kind, kind))
         batch_id = cur.fetchone()["id"]
         conn.commit()
     log.info("%s batch %s submitted with %d items", kind, b.id, n)
@@ -249,8 +252,9 @@ def _read_output(client, b) -> tuple[dict, dict]:
                 err = rec.get("error") or {}
                 errors[rec["custom_id"]] = err.get("message") or json.dumps(err)[:300]
     for e in (getattr(b, "errors", None) and b.errors.data) or []:
-        # batch-level validation errors apply to every item
-        errors.setdefault("*", f"{e.code}: {e.message}")
+        # batch-level validation errors apply to every item; say so in words
+        # an intern can act on, and keep the code for us
+        errors.setdefault("*", f"OpenAI rejected the whole batch before reviewing anything ({e.code}).")
     return results, errors
 
 
@@ -280,7 +284,7 @@ def _ingest(client, batch_id, b) -> None:
         try:
             if not rec:
                 raise RuntimeError(errors.get(cid) or errors.get("*")
-                                   or f"no result (batch {b.status})")
+                                   or f"No result came back for this article (batch {b.status}).")
             resp = rec.get("response") or {}
             if resp.get("status_code") != 200:
                 raise RuntimeError(errors.get(cid) or f"HTTP {resp.get('status_code')}: "

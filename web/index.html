@@ -56,7 +56,7 @@
 
     <div class="filters" id="filters">
       <button class="chip" aria-pressed="true" data-status="">All</button>
-      <button class="chip" aria-pressed="false" data-status="queued">In queue</button>
+      <button class="chip" aria-pressed="false" data-status="queued">In progress</button>
       <button class="chip" aria-pressed="false" data-status="reviewed">Needs review</button>
       <button class="chip" aria-pressed="false" data-status="sent_for_verification">Awaiting doctor</button>
       <button class="chip" aria-pressed="false" data-status="verified">Verified</button>
@@ -77,7 +77,7 @@
       </div>
       <div class="topbar-actions">
         <button class="btn" data-goto="new">+ New article</button>
-        <button class="btn" data-goto="queue">Queue</button>
+        <button class="btn" data-goto="queue">Batches</button>
         <button class="btn" data-goto="experts">Experts</button>
         <button class="btn" id="whoBtn" title="Sign out"></button>
       </div>
@@ -87,16 +87,17 @@
     <section class="stage screen on" id="s-new">
       <div class="when" id="whenSwitch">
         <button class="when-opt" data-mode="queue" aria-pressed="true">
-          <b>Queue it</b>
+          <b>Add to next batch</b>
           <span class="when-price" id="queuePrice">half price</span>
-          <small>One article at a time, same as now &mdash; just cheaper and slower. Usually ready
-            within the hour; always by tomorrow morning. Shows up under <em>In queue</em>,
-            then moves to <em>Needs review</em>.</small>
+          <small>Goes out with whatever else is waiting, at half price. Each article is still
+            reviewed on its own. Usually reviewed within the hour; always by tomorrow morning.
+            Shows as <em>Waiting for next batch</em>, then <em>Reviewing</em>, then
+            <em>Needs review</em>.</small>
         </button>
         <button class="when-opt" data-mode="now" aria-pressed="false">
           <b>Review now</b>
           <span class="when-price" id="nowPrice">full price</span>
-          <small>About 90 seconds for this article. Use it when someone is waiting on the answer.</small>
+          <small>Reviewed straight away, about 90 seconds. Use it when someone is waiting on the answer.</small>
         </button>
       </div>
       <div class="drop" id="dropZone">
@@ -115,7 +116,7 @@
             <button class="chip" data-engine="claude" aria-pressed="true">Claude</button>
             <button class="chip" data-engine="openai" aria-pressed="false">ChatGPT</button>
           </span>
-          <button class="btn btn-primary" id="reviewPaste">Review this</button>
+          <button class="btn btn-primary" id="reviewPaste">Add to next batch</button>
         </div>
       </div>
     </section>
