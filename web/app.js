@@ -994,11 +994,13 @@ async function openDetail(id) {
         <div>
           <div class="qp-t" style="color:var(--must)">The queue could not review this one</div>
           <p>${esc(d.queue.error || 'No result came back.')} Nothing was charged.
-             ${d.queue.other_failed ? `<b>${d.queue.other_failed} other article${d.queue.other_failed === 1 ? '' : 's'}</b> failed in the queue too &mdash;
-             <a href="#" id="qOpenQueue">open the Queue</a> to send them all back in one go.` : ''}</p>
+             ${d.queue.other_failed ? `<b>${d.queue.other_failed} other article${d.queue.other_failed === 1 ? '' : 's'}</b> failed in the queue too
+             (<a href="#" id="qOpenQueue">see the Queue</a>).` : ''}</p>
         </div>
         <div class="qp-acts">
-          <button class="btn btn-primary" id="qRequeueDetail">Send back to the queue &middot; ${approx(qEst('rescore').usd / 2)}</button>
+          <button class="btn btn-primary" id="qRequeueDetail">${d.queue.other_failed
+            ? `Send all ${d.queue.other_failed + 1} back to the queue &middot; ${approx(qEst('rescore').usd / 2)} each`
+            : `Send back to the queue &middot; ${approx(qEst('rescore').usd / 2)}`}</button>
           <button class="btn" id="qNowDetail">Review this one now &middot; ${approx(qEst('rescore').usd)}</button>
         </div>
       </div>` : '';
@@ -1065,9 +1067,10 @@ async function openDetail(id) {
     if (qr) qr.onclick = async () => {
       qr.disabled = true;
       try {
-        await api('/api/queue/requeue', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ article_ids: [id] }) });
-        toast('Back in the queue and sent'); loadList(); openDetail(id);
+        const all = !!(d.queue && d.queue.other_failed);   // every failed article, not just this one
+        const out = await api('/api/queue/requeue', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(all ? {} : { article_ids: [id] }) });
+        toast(`${out.requeued} back in the queue and sent`); loadList(); openDetail(id);
       } catch (e) { qr.disabled = false; toast('Could not re-queue: ' + e.message, true); }
     };
     const qo = $('#qOpenQueue');
