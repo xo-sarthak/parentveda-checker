@@ -54,3 +54,7 @@ create table if not exists shadow_reviews (
   created_at  timestamptz not null default now()
 );
 create index if not exists shadow_reviews_version_idx on shadow_reviews (version_id);
+
+-- OpenAI allows one model per batch: the shadow judge gets its own.
+alter table batches add column if not exists kind text not null default 'main';   -- main | shadow
+alter table queue_items add column if not exists shadow_batch_id uuid references batches(id);

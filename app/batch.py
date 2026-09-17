@@ -25,12 +25,12 @@ TICK_SECONDS = int(os.environ.get("PV_BATCH_TICK", "300"))
 MAX_ATTEMPTS = 2          # a second try after an expiry or transient failure
 ENDPOINT = "/v1/responses"
 
-# The shadow judge: a cheaper model reviews the same article in the same
-# batch. Its result is stored in shadow_reviews and never shown — it exists
-# so that, after a month of real articles, scripts/shadow_report.py can say
+# The shadow judge: a cheaper model reviews the same articles, submitted in
+# its own batch alongside the real one (OpenAI allows one model per batch).
+# Its result is stored in shadow_reviews and never shown — it exists so
+# that, after a month of real articles, scripts/shadow_report.py can say
 # whether the cheap model would have been good enough. Empty string = off.
 SHADOW_MODEL = os.environ.get("PV_SHADOW_MODEL", "gpt-5.6-luna")
-SHADOW_SUFFIX = ":shadow"
 
 
 def _client():
@@ -70,11 +70,12 @@ def status_for(article_id: str) -> dict | None:
 
 def pull_out(article_id: str) -> dict | None:
     """Take an article out of the queue so it can be reviewed instantly.
-    Only possible while it is still queued (not yet sent to OpenAI)."""
+    Possible while it is still waiting, or after the queue gave up on it —
+    not once it has been sent to OpenAI."""
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute(
             "update queue_items set status='failed', error='reviewed instantly instead', "
-            "completed_at=now() where article_id=%s and status='queued' "
+            "completed_at=now() where article_id=%s and status in ('queued','failed') "
             "returning version_id", (article_id,))
         row = cur.fetchone()
         conn.commit()
@@ -83,9 +84,26 @@ def pull_out(article_id: str) -> dict | None:
 
 # ------------------------------------------------------------------ submit
 
+def _create_batch(client, lines: list[str], kind: str, n: int):
+    payload = ("\n".join(lines) + "\n").encode("utf-8")
+    f = client.files.create(file=(f"reviews-{kind}.jsonl", io.BytesIO(payload)), purpose="batch")
+    b = client.batches.create(input_file_id=f.id, endpoint=ENDPOINT,
+                              completion_window="24h",
+                              metadata={"app": "parentveda-checker", "kind": kind, "n": str(n)})
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "insert into batches (openai_id, status, input_file_id, n_items, kind) "
+            "values (%s,%s,%s,%s,%s) returning id", (b.id, b.status, f.id, n, kind))
+        batch_id = cur.fetchone()["id"]
+        conn.commit()
+    log.info("%s batch %s submitted with %d items", kind, b.id, n)
+    return batch_id, b.id
+
+
 def submit() -> dict | None:
-    """Everything queued → one batch. Returns the batch row, or None if the
-    queue was empty."""
+    """Everything queued → one batch for the real judge and, if configured,
+    one for the shadow. Returns what was submitted, or None if the queue
+    was empty."""
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute(
             "select q.id, q.model, q.effort, v.body from queue_items q "
@@ -97,39 +115,41 @@ def submit() -> dict | None:
 
     from app import engines
     catalogue = content.catalogue()
-    lines = []
+    main, shadow = [], []
     for it in items:
         system, user = judge.parts(it["body"], catalogue)
         body = engines.openai_request(it["model"], system, user, it["effort"],
                                       judge.MAX_TOKENS, judge.SCHEMA)
-        lines.append(json.dumps({"custom_id": str(it["id"]), "method": "POST",
-                                 "url": ENDPOINT, "body": body}, ensure_ascii=False))
+        main.append(json.dumps({"custom_id": str(it["id"]), "method": "POST",
+                                "url": ENDPOINT, "body": body}, ensure_ascii=False))
         if SHADOW_MODEL and SHADOW_MODEL != it["model"]:
-            shadow = engines.openai_request(SHADOW_MODEL, system, user, it["effort"],
-                                            judge.MAX_TOKENS, judge.SCHEMA)
-            lines.append(json.dumps({"custom_id": str(it["id"]) + SHADOW_SUFFIX,
-                                     "method": "POST", "url": ENDPOINT, "body": shadow},
-                                    ensure_ascii=False))
-    payload = ("\n".join(lines) + "\n").encode("utf-8")
+            sbody = engines.openai_request(SHADOW_MODEL, system, user, it["effort"],
+                                           judge.MAX_TOKENS, judge.SCHEMA)
+            shadow.append(json.dumps({"custom_id": str(it["id"]), "method": "POST",
+                                      "url": ENDPOINT, "body": sbody}, ensure_ascii=False))
 
     client = _client()
-    f = client.files.create(file=("reviews.jsonl", io.BytesIO(payload)), purpose="batch")
-    b = client.batches.create(input_file_id=f.id, endpoint=ENDPOINT,
-                              completion_window="24h",
-                              metadata={"app": "parentveda-checker", "n": str(len(items))})
-
+    ids = [it["id"] for it in items]
+    batch_id, openai_id = _create_batch(client, main, "main", len(items))
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "insert into batches (openai_id, status, input_file_id, n_items) "
-            "values (%s,%s,%s,%s) returning id", (b.id, b.status, f.id, len(items)))
-        batch_id = cur.fetchone()["id"]
-        cur.execute(
             "update queue_items set status='submitted', batch_id=%s, submitted_at=now(), "
-            "attempts=attempts+1 where id = any(%s)",
-            (batch_id, [it["id"] for it in items]))
+            "attempts=attempts+1 where id = any(%s)", (batch_id, ids))
         conn.commit()
-    log.info("batch %s submitted with %d items", b.id, len(items))
-    return {"id": batch_id, "openai_id": b.id, "n": len(items)}
+
+    out = {"id": batch_id, "openai_id": openai_id, "n": len(items)}
+    if shadow:
+        try:  # the shadow is a data point; its failure must not touch the real run
+            sid, soid = _create_batch(client, shadow, "shadow", len(shadow))
+            with store.connect() as conn, conn.cursor() as cur:
+                cur.execute("update queue_items set shadow_batch_id=%s where id = any(%s)",
+                            (sid, ids))
+                conn.commit()
+            out["shadow"] = {"id": sid, "openai_id": soid}
+        except Exception as exc:
+            log.warning("shadow batch not submitted: %s", exc)
+            out["shadow_error"] = str(exc)[:300]
+    return out
 
 
 # ------------------------------------------------------------------ poll + ingest
@@ -140,7 +160,7 @@ _TERMINAL = ("completed", "expired", "failed", "cancelled")
 def poll() -> list[dict]:
     """Check every batch in flight; ingest the ones that finished."""
     with store.connect() as conn, conn.cursor() as cur:
-        cur.execute("select id, openai_id from batches where status != all(%s)",
+        cur.execute("select id, openai_id, kind from batches where status != all(%s)",
                     (list(_TERMINAL),))
         open_batches = cur.fetchall()
     if not open_batches:
@@ -155,30 +175,50 @@ def poll() -> list[dict]:
                 cur.execute("update batches set status=%s where id=%s", (b.status, row["id"]))
                 conn.commit()
             continue
-        _ingest(client, row["id"], b)
-        done.append({"id": row["id"], "status": b.status})
+        if row["kind"] == "shadow":
+            _ingest_shadow(client, row["id"], b)
+        else:
+            _ingest(client, row["id"], b)
+        done.append({"id": row["id"], "kind": row["kind"], "status": b.status})
     return done
 
 
-def _ingest(client, batch_id, b) -> None:
-    """Turn a finished batch into runs. Anything without a good result is
-    re-queued once, then marked failed with the reason."""
+def _read_output(client, b) -> tuple[dict, dict]:
+    """custom_id → result line, and custom_id → error message."""
     results: dict[str, dict] = {}
     if b.output_file_id:
-        text = client.files.content(b.output_file_id).text
-        for line in text.splitlines():
+        for line in client.files.content(b.output_file_id).text.splitlines():
             if line.strip():
                 rec = json.loads(line)
                 results[rec["custom_id"]] = rec
     errors: dict[str, str] = {}
     if b.error_file_id:
-        text = client.files.content(b.error_file_id).text
-        for line in text.splitlines():
+        for line in client.files.content(b.error_file_id).text.splitlines():
             if line.strip():
                 rec = json.loads(line)
                 err = rec.get("error") or {}
                 errors[rec["custom_id"]] = err.get("message") or json.dumps(err)[:300]
+    for e in (getattr(b, "errors", None) and b.errors.data) or []:
+        # batch-level validation errors apply to every item
+        errors.setdefault("*", f"{e.code}: {e.message}")
+    return results, errors
 
+
+def _close_batch(batch_id, b) -> None:
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "update batches set status=%s, output_file_id=%s, error_file_id=%s, "
+            "completed_at=now(), error=%s where id=%s",
+            (b.status, b.output_file_id, b.error_file_id,
+             json.dumps(b.errors.model_dump())[:500] if getattr(b, "errors", None) else None,
+             batch_id))
+        conn.commit()
+
+
+def _ingest(client, batch_id, b) -> None:
+    """Turn a finished batch into runs. Anything without a good result is
+    re-queued once, then marked failed with the reason."""
+    results, errors = _read_output(client, b)
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute("select id, version_id, model, effort, attempts, created_by, created_at "
                     "from queue_items where batch_id=%s and status='submitted'", (batch_id,))
@@ -186,11 +226,11 @@ def _ingest(client, batch_id, b) -> None:
 
     for it in items:
         cid = str(it["id"])
-        _shadow(it, results.get(cid + SHADOW_SUFFIX), errors.get(cid + SHADOW_SUFFIX))
         rec = results.get(cid)
         try:
             if not rec:
-                raise RuntimeError(errors.get(cid) or f"no result (batch {b.status})")
+                raise RuntimeError(errors.get(cid) or errors.get("*")
+                                   or f"no result (batch {b.status})")
             resp = rec.get("response") or {}
             if resp.get("status_code") != 200:
                 raise RuntimeError(errors.get(cid) or f"HTTP {resp.get('status_code')}: "
@@ -209,55 +249,55 @@ def _ingest(client, batch_id, b) -> None:
                 _mark(it["id"], "queued", error=str(exc)[:500])
             else:
                 _mark(it["id"], "failed", error=str(exc)[:500])
+    _close_batch(batch_id, b)
 
+
+def _ingest_shadow(client, batch_id, b) -> None:
+    """Store the cheap model's take on each article. Never raises, never
+    re-queues: the shadow is a data point, not a dependency."""
+    results, errors = _read_output(client, b)
     with store.connect() as conn, conn.cursor() as cur:
-        cur.execute(
-            "update batches set status=%s, output_file_id=%s, error_file_id=%s, "
-            "completed_at=now(), error=%s where id=%s",
-            (b.status, b.output_file_id, b.error_file_id,
-             json.dumps(b.errors.model_dump()) [:500] if getattr(b, "errors", None) else None,
-             batch_id))
-        conn.commit()
-
-
-def _shadow(it, rec, err) -> None:
-    """Store the cheap model's take on the same article. Never raises: the
-    shadow is a data point, not a dependency."""
-    if not SHADOW_MODEL or (rec is None and err is None):
-        return
-    row = {"overall": None, "verdict": None, "review": {}, "cost": 0.0, "error": None}
-    try:
-        if not rec:
-            raise RuntimeError(err or "no shadow result")
-        resp = rec.get("response") or {}
-        if resp.get("status_code") != 200:
-            raise RuntimeError(err or f"HTTP {resp.get('status_code')}")
-        from app import engines
-        parsed = engines.parse_openai(resp["body"], SHADOW_MODEL, it["effort"])
-        parsed["usage"]["batch"] = True
-        review = judge.finish(parsed)
-        row.update(overall=review["overall"], verdict=review["verdict"],
-                   cost=store.cost_usd(review["_usage"]),
-                   review={k: v for k, v in review.items() if not k.startswith("_")})
-    except Exception as exc:
-        row["error"] = str(exc)[:500]
-    try:
-        with store.connect() as conn, conn.cursor() as cur:
-            cur.execute(
-                "insert into shadow_reviews (version_id, model, overall, verdict, review, "
-                "cost_usd, error) values (%s,%s,%s,%s,%s,%s,%s)",
-                (it["version_id"], SHADOW_MODEL, row["overall"], row["verdict"],
-                 json.dumps(row["review"], ensure_ascii=False), row["cost"], row["error"]))
-            conn.commit()
-    except Exception:
-        log.exception("shadow review for %s not stored", it["id"])
+        cur.execute("select id, version_id, effort from queue_items where shadow_batch_id=%s",
+                    (batch_id,))
+        items = cur.fetchall()
+    from app import engines
+    for it in items:
+        cid = str(it["id"])
+        row = {"overall": None, "verdict": None, "review": {}, "cost": 0.0, "error": None}
+        try:
+            rec = results.get(cid)
+            if not rec:
+                raise RuntimeError(errors.get(cid) or errors.get("*") or f"no result (batch {b.status})")
+            resp = rec.get("response") or {}
+            if resp.get("status_code") != 200:
+                raise RuntimeError(errors.get(cid) or f"HTTP {resp.get('status_code')}")
+            parsed = engines.parse_openai(resp["body"], SHADOW_MODEL, it["effort"])
+            parsed["usage"]["batch"] = True
+            review = judge.finish(parsed)
+            row.update(overall=review["overall"], verdict=review["verdict"],
+                       cost=store.cost_usd(review["_usage"]),
+                       review={k: v for k, v in review.items() if not k.startswith("_")})
+        except Exception as exc:
+            row["error"] = str(exc)[:500]
+        try:
+            with store.connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "insert into shadow_reviews (version_id, model, overall, verdict, review, "
+                    "cost_usd, error) values (%s,%s,%s,%s,%s,%s,%s)",
+                    (it["version_id"], SHADOW_MODEL, row["overall"], row["verdict"],
+                     json.dumps(row["review"], ensure_ascii=False), row["cost"], row["error"]))
+                conn.commit()
+        except Exception:
+            log.exception("shadow review for %s not stored", cid)
+    _close_batch(batch_id, b)
 
 
 def _mark(item_id, status: str, error: str | None = None) -> None:
     with store.connect() as conn, conn.cursor() as cur:
         if status == "queued":       # back for another go: forget the old batch
             cur.execute("update queue_items set status='queued', batch_id=null, "
-                        "submitted_at=null, error=%s where id=%s", (error, item_id))
+                        "shadow_batch_id=null, submitted_at=null, error=%s where id=%s",
+                        (error, item_id))
         else:
             cur.execute("update queue_items set status=%s, error=%s, completed_at=now() "
                         "where id=%s", (status, error, item_id))

@@ -68,8 +68,8 @@ function syncModeWithEngine() {
   const ests = window.PV_CONFIG && window.PV_CONFIG.estimates && window.PV_CONFIG.estimates[engine];
   const usd = ests ? ests.rescore.usd : 0;
   if (!state.estimates && ests) state.estimates = ests;
-  $('#queuePrice').textContent = canQueue ? approx(usd / 2) + ' · half price' : 'ChatGPT only';
-  $('#nowPrice').textContent = approx(usd);
+  $('#queuePrice').textContent = canQueue ? approx(usd / 2) + ' per article · half price' : 'ChatGPT only';
+  $('#nowPrice').textContent = approx(usd) + ' per article';
 }
 function shortModel(m) { return (m || '').replace('claude-', ''); }
 
@@ -142,6 +142,7 @@ async function loadList() {
           <span>${inQueue(a) ? (a.queue_status === 'submitted' ? 'Being reviewed &middot; queued ' : 'In queue since ') + hhmm(a.queued_at)
                   : queueFailed(a) ? 'Queue failed &mdash; review now'
                   : esc(VERDICTS[a.verdict] || a.status)}</span>
+          ${a.score != null && a.batch != null ? `<span class="item-tag ${a.batch ? 't-queue' : 't-now'}" title="${a.batch ? 'Reviewed through the queue (half price)' : 'Reviewed instantly'}">${a.batch ? 'queue' : 'now'}</span>` : ''}
           ${a.words ? `<span>&middot;</span><span>${a.words.toLocaleString()} w</span>` : ''}
           <span>&middot;</span><span>${new Date(a.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>
         </div>
@@ -251,7 +252,7 @@ async function queueSubmit({ file, text }) {
           <b>Needs review</b> on its own &mdash; you don't need to keep this page open.</p>
         <div class="topbar-actions" style="justify-content:center">
           <button class="btn btn-primary" id="qAnother">Upload another</button>
-          <button class="btn" id="qNow">Review it now instead &middot; ${approx(est('rescore').usd)}</button>
+          <button class="btn" id="qNow">Review this one now instead &middot; ${approx(est('rescore').usd)}</button>
         </div>
       </div>`;
     $('#pasteBox').value = ''; $('#pasteCount').textContent = '0 words';
@@ -895,7 +896,7 @@ async function openDetail(id) {
              Usually ready within the hour, always by tomorrow morning. This page updates on its own.</p>
         </div>
         <div class="qp-acts">
-          ${qs === 'queued' ? `<button class="btn" id="qNowDetail">Review now instead &middot; ${approx(est('rescore').usd)}</button>` : ''}
+          ${qs === 'queued' ? `<button class="btn" id="qNowDetail">Review this one now &middot; ${approx(est('rescore').usd)}</button>` : ''}
         </div>
       </div>` : qFailed ? `
       <div class="queued-panel" style="border-color:var(--must); background:var(--must-bg)">
@@ -904,7 +905,7 @@ async function openDetail(id) {
           <div class="qp-t" style="color:var(--must)">The queue could not review this one</div>
           <p>${esc(d.queue.error || 'No result came back.')} Nothing was charged. Review it now instead.</p>
         </div>
-        <div class="qp-acts"><button class="btn btn-primary" id="qNowDetail">Review now &middot; ${approx(est('rescore').usd)}</button></div>
+        <div class="qp-acts"><button class="btn btn-primary" id="qNowDetail">Review this one now &middot; ${approx(est('rescore').usd)}</button></div>
       </div>` : '';
 
     $('#s-detail').innerHTML = `
