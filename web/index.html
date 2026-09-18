@@ -62,6 +62,9 @@
       <button class="chip" aria-pressed="false" data-status="verified">Verified</button>
     </div>
 
+    <div class="rail-label" id="batchLabel" hidden>Batches</div>
+    <nav class="list" id="batchList" hidden></nav>
+
     <div class="rail-label">Articles</div>
     <nav class="list" id="articleList">
       <div class="empty">Loading&hellip;</div>
@@ -77,7 +80,7 @@
       </div>
       <div class="topbar-actions">
         <button class="btn" data-goto="new">+ New article</button>
-        <button class="btn" data-goto="queue">Batches</button>
+        <button class="btn" data-goto="batches">Batches</button>
         <button class="btn" data-goto="experts">Experts</button>
         <button class="btn" id="whoBtn" title="Sign out"></button>
       </div>
@@ -85,30 +88,16 @@
 
     <!-- new -->
     <section class="stage screen on" id="s-new">
-      <div class="when" id="whenSwitch">
-        <button class="when-opt" data-mode="queue" aria-pressed="true">
-          <b>Add to next batch</b>
-          <span class="when-price" id="queuePrice">half price</span>
-          <small>Goes out with whatever else is waiting, at half price. Each article is still
-            reviewed on its own. Usually reviewed within the hour; always by tomorrow morning.
-            Shows as <em>Waiting for next batch</em>, then <em>Reviewing</em>, then
-            <em>Needs review</em>.</small>
-        </button>
-        <button class="when-opt" data-mode="now" aria-pressed="false">
-          <b>Review now</b>
-          <span class="when-price" id="nowPrice">full price</span>
-          <small>Reviewed straight away, about 90 seconds. Use it when someone is waiting on the answer.</small>
-        </button>
-      </div>
       <div class="drop" id="dropZone">
-        <h2>Drop an article, or paste it below</h2>
-        <p>.docx, .md or plain text &middot; scored against the ParentVeda Bible</p>
-        <button class="btn btn-primary" id="pickFile">Choose file</button>
-        <input type="file" id="fileInput" accept=".docx,.md,.txt" hidden>
+        <h2>Drop articles here, or choose files</h2>
+        <p>.docx, .md or plain text &middot; as many as you like &middot; each is scored against the ParentVeda Bible</p>
+        <button class="btn btn-primary" id="pickFile">Choose files</button>
+        <input type="file" id="fileInput" accept=".docx,.md,.txt" multiple hidden>
       </div>
+
       <div class="panel" style="margin-top:16px">
         <h3>Or paste the text</h3>
-        <textarea class="paste" id="pasteBox" placeholder="Paste the full draft here&hellip;"></textarea>
+        <textarea class="paste" id="pasteBox" placeholder="Paste one full draft here&hellip;"></textarea>
         <div class="footbar" style="position:static; border:0; padding-top:13px">
           <span class="foot-status" id="pasteCount">0 words</span>
           <span class="engine-switch" id="engineSwitch" title="Which model reviews, rewrites and drafts the doctor sheet">
@@ -116,7 +105,39 @@
             <button class="chip" data-engine="claude" aria-pressed="true">Claude</button>
             <button class="chip" data-engine="openai" aria-pressed="false">ChatGPT</button>
           </span>
-          <button class="btn btn-primary" id="reviewPaste">Add to next batch</button>
+          <button class="btn" id="addPaste">Add to the list</button>
+        </div>
+      </div>
+
+      <div class="panel picked-panel" id="pickedPanel" hidden>
+        <h3>Ready to send</h3>
+        <div id="pickedList"></div>
+        <div class="when" id="whenSwitch">
+          <button class="when-opt" data-mode="queue" aria-pressed="true">
+            <b>Send as a batch</b>
+            <span class="when-price" id="queuePrice">half price</span>
+            <small>All of them go together at half price; each article is still reviewed on its
+              own. Usually reviewed within the hour, always by tomorrow morning. You don't need
+              to keep the page open.</small>
+          </button>
+          <button class="when-opt" data-mode="now" aria-pressed="false">
+            <b>Review now</b>
+            <span class="when-price" id="nowPrice">full price</span>
+            <small>One article, reviewed straight away, about 90 seconds. For when someone is
+              waiting on the answer.</small>
+          </button>
+        </div>
+        <div class="footbar" style="position:static; border:0; padding-top:13px">
+          <span class="foot-status" id="pickedTotal"></span>
+          <div class="topbar-actions">
+            <button class="btn" id="clearPicked">Clear</button>
+            <button class="btn btn-primary" id="sendBtn">Send</button>
+            <span class="confirm-row" id="confirmRow" hidden>
+              <span id="confirmText"></span>
+              <button class="btn btn-primary" id="sendYes">Yes, send</button>
+              <button class="btn" id="sendNo">Cancel</button>
+            </span>
+          </div>
         </div>
       </div>
     </section>
@@ -130,8 +151,11 @@
     <!-- detail -->
     <section class="stage screen" id="s-detail"></section>
 
-    <!-- queue -->
-    <section class="stage screen" id="s-queue"></section>
+    <!-- one batch -->
+    <section class="stage screen" id="s-batch"></section>
+
+    <!-- all batches -->
+    <section class="stage screen" id="s-batches"></section>
 
     <!-- experts -->
     <section class="stage screen" id="s-experts"></section>

@@ -87,44 +87,61 @@ async def review(file: UploadFile | None = File(None),
             "internal_words": len(internal.split())}
 
 
-# ------------------------------------------------------------------ queue (batched)
+# ------------------------------------------------------------------ batches
 
-@app.post("/api/queue")
-async def queue_article(file: UploadFile | None = File(None),
-                        text: str | None = Form(None),
-                        title: str | None = Form(None),
-                        author: str | None = Form(None),
-                        who: str = Depends(auth.actor)):
-    """Upload into the batch queue. Half price; the review arrives later —
-    usually within the hour, always within a day. ChatGPT only."""
+@app.post("/api/batches")
+async def create_batch(files: list[UploadFile] = File([]),
+                       texts: list[str] = Form([]),
+                       author: str | None = Form(None),
+                       who: str = Depends(auth.actor)):
+    """Everything the intern uploaded together becomes one numbered batch,
+    sent to OpenAI straight away at half price. ChatGPT only."""
     if not batch.enabled():
-        raise HTTPException(503, "The queue needs the OpenAI key on the server.")
-    title, body, internal = await _incoming(file, text, title)
-    out = batch.enqueue(title, body, author=author, actor=who)
-    return {**out, "title": title, "internal_words": len(internal.split()),
-            "estimate_usd": round(store.estimate_usd(out["model"], "rescore") / 2, 4)}
+        raise HTTPException(503, "Batches need the OpenAI key on the server.")
+    drafts, problems = [], []
+    for f in files:
+        try:
+            drafts.append(await _incoming(f, None, None))
+        except HTTPException as e:
+            problems.append(f"{f.filename}: {e.detail}")
+    for t in texts:
+        try:
+            drafts.append(await _incoming(None, t, None))
+        except HTTPException as e:
+            problems.append(f"pasted text: {e.detail}")
+    if not drafts:
+        raise HTTPException(400, "; ".join(problems) or "Nothing to send.")
+
+    g = batch.create_group(who)
+    for title, body, _internal in drafts:
+        batch.enqueue(title, body, author=author, actor=who, group_id=g["id"])
+    sent = await run_in_threadpool(batch.submit)
+    out = batch.group(str(g["id"]))
+    return {**out, "problems": problems, "sent": sent,
+            "estimate_each_usd": round(store.estimate_usd(config.ENGINES["openai"]["score"], "rescore") / 2, 4)}
 
 
-@app.get("/api/queue")
-def queue_overview(who: str = Depends(auth.actor)):
-    """Every queue run with its articles — the Queue screen."""
-    return batch.overview()
+@app.get("/api/batches")
+def list_batches(limit: int = 50, who: str = Depends(auth.actor)):
+    return batch.groups(limit)
 
 
-class Requeue(BaseModel):
-    batch_id: str | None = None
-    article_ids: list[str] | None = None
+@app.get("/api/batches/{group_id}")
+def get_batch(group_id: str, who: str = Depends(auth.actor)):
+    g = batch.group(group_id)
+    if not g:
+        raise HTTPException(404, "No such batch.")
+    return g
 
 
-@app.post("/api/queue/requeue")
-async def queue_requeue(req: Requeue, who: str = Depends(auth.actor)):
-    """Failed items back into the queue, then send straight away rather than
-    waiting for the next tick."""
+@app.post("/api/batches/{group_id}/resend")
+async def resend_batch(group_id: str, who: str = Depends(auth.actor)):
+    """Every failed article in the batch goes again, now. Same batch number."""
     if not batch.enabled():
-        raise HTTPException(503, "The queue needs the OpenAI key on the server.")
-    n = batch.requeue(req.article_ids, req.batch_id)
+        raise HTTPException(503, "Batches need the OpenAI key on the server.")
+    n = batch.resend(group_id)
     sent = await run_in_threadpool(batch.submit) if n else None
-    return {"requeued": n, "sent": sent}
+    return {"resent": n, "sent": sent, **(batch.group(group_id) or {})}
 
 
 @app.get("/api/queue/{article_id}")
@@ -209,11 +226,11 @@ def articles(q: str = "", status: str = "", limit: int = 50,
                "   where v.article_id=a.id and r.kind='review' order by r.created_at desc limit 1) as batch,",
                "  qi.status as queue_status, qi.created_at as queued_at,",
                "  qi.submitted_at, qi.error as queue_error, qi.seq as queue_seq,",
-               "  qi.sent_at as queue_sent_at",
+               "  qi.sent_at as queue_sent_at, qi.group_id as queue_group",
                "from articles a",
                "left join lateral (select q.status, q.created_at, q.submitted_at, q.error,",
-               "   b.seq, b.created_at as sent_at",
-               "   from queue_items q left join batches b on b.id=q.batch_id",
+               "   g.seq, g.created_at as sent_at, g.id as group_id",
+               "   from queue_items q left join batch_groups g on g.id=q.group_id",
                "   where q.article_id=a.id order by q.created_at desc limit 1) qi on true",
                "where true"]
         args: list = []
@@ -302,12 +319,6 @@ def article_trail(article_id: str, who: str = Depends(auth.actor)):
         verification = cur.fetchall()
 
     queue = batch.status_for(article_id)
-    if queue and queue["status"] == "failed":
-        with store.connect() as conn, conn.cursor() as cur:
-            cur.execute("select count(*) as n from queue_items q where q.status='failed' "
-                        "and q.error is distinct from 'reviewed instantly instead' "
-                        "and q.article_id <> %s", (article_id,))
-            queue = dict(queue, other_failed=cur.fetchone()["n"])
 
     by_run: dict = {}
     for f in feedback:

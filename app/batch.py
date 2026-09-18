@@ -44,27 +44,128 @@ def enabled() -> bool:
 
 # ------------------------------------------------------------------ enqueue
 
-def enqueue(title: str, body: str, *, author: str | None, actor: str | None) -> dict:
-    """Store the draft and put it in the queue. No model call happens here."""
+def create_group(actor: str | None) -> dict:
+    """A batch, as the intern sees it: what they uploaded together. Numbered."""
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "insert into batch_groups (seq, created_by) values "
+            "((select coalesce(max(seq),0)+1 from batch_groups), %s) returning id, seq, created_at",
+            (actor,))
+        row = cur.fetchone()
+        conn.commit()
+    return dict(row)
+
+
+def enqueue(title: str, body: str, *, author: str | None, actor: str | None,
+            group_id) -> dict:
+    """Store the draft and put it in the batch. No model call happens here."""
     model = config.ENGINES["openai"]["score"]
     ids = store.save_draft(title, body, author=author, actor=actor)
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "insert into queue_items (article_id, version_id, model, effort, created_by) "
-            "values (%s,%s,%s,%s,%s) returning id, created_at",
-            (ids["article_id"], ids["version_id"], model, config.EFFORT, actor))
+            "insert into queue_items (article_id, version_id, model, effort, created_by, group_id) "
+            "values (%s,%s,%s,%s,%s,%s) returning id, created_at",
+            (ids["article_id"], ids["version_id"], model, config.EFFORT, actor, group_id))
         row = cur.fetchone()
         conn.commit()
     return {**ids, "queue_id": row["id"], "queued_at": row["created_at"], "model": model}
+
+
+def _group_status(items: list[dict]) -> str:
+    st = [i["status"] for i in items]
+    if any(x == "submitted" for x in st):
+        return "reviewing"
+    if any(x == "queued" for x in st):
+        return "waiting"
+    if st and all(x == "done" for x in st):
+        return "reviewed"
+    if st and all(x == "failed" for x in st):
+        return "failed"
+    return "partly_failed"
+
+
+_ITEM_SQL = (
+    "select q.id, q.article_id, a.title, q.status, q.error, q.attempts, q.created_at, "
+    "q.submitted_at, q.completed_at, q.group_id, v.word_count, "
+    "r.id as run_id, r.overall, r.verdict "
+    "from queue_items q join articles a on a.id=q.article_id "
+    "join versions v on v.id=q.version_id "
+    "left join lateral (select id, overall, verdict from runs where version_id=q.version_id "
+    "  and kind='review' order by created_at desc limit 1) r on true "
+    "where q.error is distinct from 'reviewed instantly instead' ")
+
+
+def _decorate(items: list[dict]) -> list[dict]:
+    for it in items:
+        it["overall"] = float(it["overall"]) if it["overall"] is not None else None
+    return items
+
+
+def groups(limit: int = 100) -> list[dict]:
+    """Every batch, newest first, with counts and a status word."""
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute("select id, seq, created_by, created_at from batch_groups "
+                    "order by seq desc limit %s", (limit,))
+        gs = [dict(g) for g in cur.fetchall()]
+        if not gs:
+            return []
+        cur.execute(_ITEM_SQL + "and q.group_id = any(%s) order by q.created_at",
+                    ([g["id"] for g in gs],))
+        items = _decorate(cur.fetchall())
+    by_g: dict = {}
+    for it in items:
+        by_g.setdefault(str(it["group_id"]), []).append(it)
+    out = []
+    for g in gs:
+        its = by_g.get(str(g["id"]), [])
+        if not its:
+            continue
+        st = [i["status"] for i in its]
+        out.append({**g, "n": len(its), "done": st.count("done"), "failed": st.count("failed"),
+                    "reviewing": st.count("submitted"), "waiting": st.count("queued"),
+                    "status": _group_status(its),
+                    "titles": [i["title"] for i in its[:3]]})
+    return out
+
+
+def group(group_id: str) -> dict | None:
+    """One batch with every article in it."""
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute("select id, seq, created_by, created_at from batch_groups where id=%s",
+                    (group_id,))
+        g = cur.fetchone()
+        if not g:
+            return None
+        cur.execute(_ITEM_SQL + "and q.group_id=%s order by q.created_at", (group_id,))
+        items = _decorate(cur.fetchall())
+    st = [i["status"] for i in items]
+    return {**g, "items": items, "n": len(items), "done": st.count("done"),
+            "failed": st.count("failed"), "reviewing": st.count("submitted"),
+            "waiting": st.count("queued"), "status": _group_status(items)}
+
+
+def resend(group_id: str) -> int:
+    """Every failed article in the batch goes again. Same batch number."""
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "update queue_items set status='queued', batch_id=null, shadow_batch_id=null, "
+            "submitted_at=null, completed_at=null, attempts=0, error=null "
+            "where group_id=%s and status='failed' "
+            "and error is distinct from 'reviewed instantly instead'", (group_id,))
+        n = cur.rowcount
+        conn.commit()
+    return n
 
 
 def status_for(article_id: str) -> dict | None:
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute(
             "select q.id, q.status, q.attempts, q.error, q.created_at, q.submitted_at, "
-            "q.completed_at, q.model, b.openai_id, b.seq, b.created_at as sent_at, "
-            "(select count(*) from queue_items x where x.batch_id=q.batch_id) as batch_size "
-            "from queue_items q left join batches b on b.id = q.batch_id "
+            "q.completed_at, q.model, q.group_id, g.seq, g.created_at as sent_at, "
+            "(select count(*) from queue_items x where x.group_id=q.group_id) as batch_size, "
+            "(select count(*) from queue_items x where x.group_id=q.group_id and x.status='failed' "
+            " and x.error is distinct from 'reviewed instantly instead') as batch_failed "
+            "from queue_items q left join batch_groups g on g.id = q.group_id "
             "where q.article_id=%s order by q.created_at desc limit 1", (article_id,))
         return cur.fetchone()
 
@@ -81,56 +182,6 @@ def pull_out(article_id: str) -> dict | None:
         row = cur.fetchone()
         conn.commit()
     return row
-
-
-def overview() -> dict:
-    """Every queue run, newest first, with the articles in it — what the
-    Queue screen shows. Items not yet sent form their own group."""
-    with store.connect() as conn, conn.cursor() as cur:
-        cur.execute(
-            "select q.id, q.article_id, a.title, q.status, q.error, q.attempts, q.created_at, "
-            "q.submitted_at, q.completed_at, q.batch_id, "
-            "(select overall from runs r where r.version_id=q.version_id and r.kind='review' "
-            " order by r.created_at desc limit 1) as overall "
-            "from queue_items q join articles a on a.id=q.article_id "
-            "where q.error is distinct from 'reviewed instantly instead' "
-            "order by q.created_at desc limit 500")
-        items = cur.fetchall()
-        cur.execute("select id, openai_id, status, n_items, created_at, completed_at, error, seq "
-                    "from batches where kind='main' order by created_at desc limit 200")
-        batches = {str(b["id"]): dict(b, items=[]) for b in cur.fetchall()}
-    waiting = []
-    for it in items:
-        it["overall"] = float(it["overall"]) if it["overall"] is not None else None
-        bid = str(it["batch_id"]) if it["batch_id"] else None
-        if bid and bid in batches:
-            batches[bid]["items"].append(it)
-        else:
-            waiting.append(it)
-    runs = [b for b in batches.values() if b["items"]]
-    for b in runs:
-        st = [i["status"] for i in b["items"]]
-        b["done"] = st.count("done")
-        b["failed"] = st.count("failed")
-        b["pending"] = st.count("submitted")
-    return {"waiting": waiting, "runs": runs}
-
-
-def requeue(article_ids: list[str] | None = None, batch_id: str | None = None) -> int:
-    """Put failed items back in the queue. By batch, by article, or all."""
-    with store.connect() as conn, conn.cursor() as cur:
-        sql = ("update queue_items set status='queued', batch_id=null, shadow_batch_id=null, "
-               "submitted_at=null, completed_at=null, attempts=0, error=null "
-               "where status='failed' and error is distinct from 'reviewed instantly instead'")
-        args: list = []
-        if batch_id:
-            sql += " and batch_id=%s"; args.append(batch_id)
-        if article_ids:
-            sql += " and article_id = any(%s)"; args.append(article_ids)
-        cur.execute(sql, args)
-        n = cur.rowcount
-        conn.commit()
-    return n
 
 
 # ------------------------------------------------------------------ submit

@@ -64,3 +64,20 @@ alter table batches add column if not exists seq int;
 update batches b set seq = s.n from (
   select id, row_number() over (order by created_at) as n from batches where kind='main'
 ) s where s.id = b.id and b.seq is null;
+
+-- A batch is what an intern uploads together. It keeps its number across
+-- retries; OpenAI batches (table `batches`) are the transport underneath.
+create table if not exists batch_groups (
+  id          uuid primary key default uuid_generate_v4(),
+  seq         int unique,
+  created_by  text,
+  created_at  timestamptz not null default now()
+);
+alter table queue_items add column if not exists group_id uuid references batch_groups(id);
+-- backfill: every existing item becomes its own batch, numbered by upload time
+insert into batch_groups (id, seq, created_by, created_at)
+  select uuid_generate_v4(), row_number() over (order by q.created_at), q.created_by, q.created_at
+  from queue_items q where q.group_id is null and q.error is distinct from 'reviewed instantly instead'
+  and not exists (select 1 from batch_groups);
+update queue_items q set group_id = g.id from batch_groups g
+  where q.group_id is null and g.created_at = q.created_at and g.created_by is not distinct from q.created_by;
