@@ -113,11 +113,13 @@ async def create_batch(files: list[UploadFile] = File([]),
         raise HTTPException(400, "; ".join(problems) or "Nothing to send.")
 
     g = batch.create_group(who)
-    for title, body, _internal in drafts:
-        batch.enqueue(title, body, author=author, actor=who, group_id=g["id"])
-    sent = await run_in_threadpool(batch.submit)
+    batch.enqueue_many([(t, b) for t, b, _ in drafts], author=author, actor=who, group_id=g["id"])
+    # Reply as soon as the batch exists; the upload to OpenAI runs behind the
+    # response and the batch screen shows "Sending" until it has gone.
+    import asyncio
+    asyncio.create_task(run_in_threadpool(batch.submit))
     out = batch.group(str(g["id"]))
-    return {**out, "problems": problems, "sent": sent,
+    return {**out, "problems": problems,
             "estimate_each_usd": round(store.estimate_usd(config.ENGINES["openai"]["score"], "rescore") / 2, 4)}
 
 
@@ -140,8 +142,10 @@ async def resend_batch(group_id: str, who: str = Depends(auth.actor)):
     if not batch.enabled():
         raise HTTPException(503, "Batches need the OpenAI key on the server.")
     n = batch.resend(group_id)
-    sent = await run_in_threadpool(batch.submit) if n else None
-    return {"resent": n, "sent": sent, **(batch.group(group_id) or {})}
+    if n:
+        import asyncio
+        asyncio.create_task(run_in_threadpool(batch.submit))
+    return {"resent": n, **(batch.group(group_id) or {})}
 
 
 @app.get("/api/queue/{article_id}")

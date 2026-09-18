@@ -91,9 +91,10 @@ async function api(path, opts = {}) {
   const r = await fetch(path, { ...opts, headers });
   if (r.status === 401) { showGate('That sign-in has expired. Sign in again.'); throw new Error('Signed out'); }
   if (!r.ok) {
-    let detail = r.statusText;
-    try { detail = (await r.json()).detail || detail; } catch (e) {}
-    throw new Error(detail);
+    let detail = '';
+    try { detail = (await r.json()).detail || ''; } catch (e) {}
+    if (typeof detail !== 'string') detail = JSON.stringify(detail);
+    throw new Error(detail || `The server answered ${r.status}${r.statusText ? ' ' + r.statusText : ''}.`);
   }
   return r.json();
 }
@@ -221,6 +222,7 @@ $('#filters').querySelectorAll('.chip').forEach(c => c.onclick = () => {
 /* What the intern has picked so far. Files and pasted texts sit in one list;
    nothing is sent until they press the button. */
 let picked = [];
+let confirming = false;
 
 $('#pickFile').onclick = () => $('#fileInput').click();
 $('#fileInput').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
@@ -250,7 +252,7 @@ function addFiles(files) {
   parts.push(`${picked.length} ready to send`);
   toast(parts.join(' · '), !!skipped);
   renderPicked();
-  if (added) $('#pickedPanel').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+
 }
 
 $('#pasteBox').oninput = e => {
@@ -273,7 +275,6 @@ $('#clearPicked').onclick = () => { picked = []; confirming = false; renderPicke
 
 /* The button asks once more, with the count and the price, before anything
    is sent. Files can still be added or removed while it is asking. */
-let confirming = false;
 $('#sendBtn').onclick = () => {
   if (!picked.length) return;
   if (mode === 'now') return sendPicked();          // one article, straight away
@@ -285,8 +286,17 @@ $('#sendNo').onclick = () => { confirming = false; renderPicked(); };
 function renderPicked() {
   const panel = $('#pickedPanel');
   if (!panel) return;
-  panel.hidden = !picked.length;
-  if (!picked.length) return;
+  panel.classList.toggle('has-items', picked.length > 0);
+  $('#pickCount').textContent = picked.length ? picked.length : '';
+  $('#clearPicked').hidden = !picked.length;
+  $('#sendBtn').hidden = !picked.length || confirming;
+  $('#confirmRow').hidden = !confirming;
+  if (!picked.length) {
+    $('#pickedList').innerHTML = '<div class="pick-empty">Nothing picked yet. Drop files on the left, or paste a draft and add it.</div>';
+    $('#pickedTotal').innerHTML = '';
+    confirming = false;
+    return;
+  }
   $('#pickedList').innerHTML = picked.map((x, i) => `
     <div class="pick-row">
       <span class="pick-n mono">${i + 1}</span>
@@ -312,8 +322,6 @@ function renderPicked() {
     ? `Send batch &middot; ${n} article${n === 1 ? '' : 's'} &middot; ${approx(total)} &rarr;`
     : `Review now &middot; ${approx(total)} &rarr;`;
   $('#sendBtn').disabled = mode === 'now' && n !== 1;
-  $('#sendBtn').hidden = confirming;
-  $('#confirmRow').hidden = !confirming;
   if (confirming) $('#confirmText').innerHTML =
     `Send <b>${n} article${n === 1 ? '' : 's'}</b> as one batch for about <b>${approx(total)}</b>?`;
 }

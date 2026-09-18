@@ -56,19 +56,29 @@ def create_group(actor: str | None) -> dict:
     return dict(row)
 
 
-def enqueue(title: str, body: str, *, author: str | None, actor: str | None,
-            group_id) -> dict:
-    """Store the draft and put it in the batch. No model call happens here."""
+def enqueue_many(drafts: list[tuple[str, str]], *, author: str | None, actor: str | None,
+                 group_id) -> int:
+    """Store every draft and put it in the batch — one connection, one
+    commit, so five articles cost one round trip and not ten. No model call
+    happens here."""
     model = config.ENGINES["openai"]["score"]
-    ids = store.save_draft(title, body, author=author, actor=actor)
     with store.connect() as conn, conn.cursor() as cur:
-        cur.execute(
-            "insert into queue_items (article_id, version_id, model, effort, created_by, group_id) "
-            "values (%s,%s,%s,%s,%s,%s) returning id, created_at",
-            (ids["article_id"], ids["version_id"], model, config.EFFORT, actor, group_id))
-        row = cur.fetchone()
+        for title, body in drafts:
+            cur.execute(
+                "insert into articles (title, author, status, created_by) "
+                "values (%s,%s,'draft',%s) returning id", (title, author, actor))
+            article_id = cur.fetchone()["id"]
+            cur.execute(
+                "insert into versions (article_id, version_no, body, word_count, source, "
+                "created_by) values (%s,1,%s,%s,'upload',%s) returning id",
+                (article_id, body, len(body.split()), actor))
+            version_id = cur.fetchone()["id"]
+            cur.execute(
+                "insert into queue_items (article_id, version_id, model, effort, created_by, group_id) "
+                "values (%s,%s,%s,%s,%s,%s)",
+                (article_id, version_id, model, config.EFFORT, actor, group_id))
         conn.commit()
-    return {**ids, "queue_id": row["id"], "queued_at": row["created_at"], "model": model}
+    return len(drafts)
 
 
 def _group_status(items: list[dict]) -> str:

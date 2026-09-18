@@ -286,7 +286,7 @@ kbd{
 .kv dd{margin:0; font-variant-numeric:tabular-nums}
 
 .drop{
-  border:1.5px dashed var(--line-2); border-radius:14px; padding:60px 32px;
+  border:1.5px dashed var(--line-2); border-radius:14px; padding:38px 28px;
   text-align:center; background:var(--surface);
 }
 .drop h2{font-family:Newsreader,Georgia,serif; font-size:23px; font-weight:500; margin-bottom:7px}
@@ -364,7 +364,7 @@ input[type=checkbox]{accent-color:var(--accent); width:15px; height:15px}
 }
 .toast.err{background:var(--must)}
 .paste{
-  width:100%; min-height:210px; padding:14px 16px; border-radius:11px;
+  width:100%; min-height:150px; padding:14px 16px; border-radius:11px;
   border:1px solid var(--line-2); font:inherit; line-height:1.6;
   color:var(--ink); background:var(--surface); resize:vertical;
 }
@@ -665,3 +665,20 @@ input[type=checkbox]{accent-color:var(--accent); width:15px; height:15px}
 .confirm-row{display:inline-flex; gap:8px; align-items:center; font-size:13px; color:var(--ink-2);
   padding:6px 10px; border:1px solid var(--should); background:var(--should-bg); border-radius:8px}
 .confirm-row b{color:var(--ink)}
+
+/* ---- New article: files on the left, the send panel on the right */
+.stage-wide{max-width:1280px}
+.new-grid{display:grid; grid-template-columns:minmax(0,1fr) minmax(360px,440px); gap:18px; align-items:start}
+.picked-panel{position:sticky; top:0}
+.picked-panel h3{display:flex; align-items:center; gap:8px}
+.pick-count{font-family:"IBM Plex Mono",monospace; font-size:11px; color:#fff; background:var(--accent);
+  border-radius:10px; padding:1px 7px; line-height:16px}
+.pick-count:empty{display:none}
+.pick-empty{font-size:13px; color:var(--ink-3); padding:18px 4px 12px; line-height:1.5}
+.picked-panel .when{grid-template-columns:1fr; margin:12px 0 6px}
+.picked-panel:not(.has-items) .when, .picked-panel:not(.has-items) .pick-foot{opacity:.45; pointer-events:none}
+.pick-foot{display:flex; flex-direction:column; gap:10px; padding-top:10px}
+.pick-acts{display:flex; gap:8px; justify-content:flex-end}
+.pick-acts .btn-primary{flex:1}
+.confirm-row{display:flex; flex-wrap:wrap}
+@media (max-width:1100px){ .new-grid{grid-template-columns:1fr} .picked-panel{position:static} }

@@ -87,56 +87,59 @@
     </div>
 
     <!-- new -->
-    <section class="stage screen on" id="s-new">
-      <div class="drop" id="dropZone">
-        <h2>Drop articles here, or choose files</h2>
-        <p>.docx, .md or plain text &middot; as many as you like &middot; each is scored against the ParentVeda Bible</p>
-        <button class="btn btn-primary" id="pickFile">Choose files</button>
-        <input type="file" id="fileInput" accept=".docx,.md,.txt" multiple hidden>
-      </div>
+    <section class="stage screen on stage-wide" id="s-new">
+      <div class="new-grid">
+        <div class="new-left">
+          <div class="drop" id="dropZone">
+            <h2>Drop articles here, or choose files</h2>
+            <p>.docx, .md or plain text &middot; as many as you like</p>
+            <button class="btn btn-primary" id="pickFile">Choose files</button>
+            <input type="file" id="fileInput" accept=".docx,.md,.txt" multiple hidden>
+          </div>
 
-      <div class="panel" style="margin-top:16px">
-        <h3>Or paste the text</h3>
-        <textarea class="paste" id="pasteBox" placeholder="Paste one full draft here&hellip;"></textarea>
-        <div class="footbar" style="position:static; border:0; padding-top:13px">
-          <span class="foot-status" id="pasteCount">0 words</span>
-          <span class="engine-switch" id="engineSwitch" title="Which model reviews, rewrites and drafts the doctor sheet">
-            <span class="engine-label">Engine</span>
-            <button class="chip" data-engine="claude" aria-pressed="true">Claude</button>
-            <button class="chip" data-engine="openai" aria-pressed="false">ChatGPT</button>
-          </span>
-          <button class="btn" id="addPaste">Add to the list</button>
+          <div class="panel" style="margin-top:14px">
+            <h3>Or paste the text</h3>
+            <textarea class="paste" id="pasteBox" placeholder="Paste one full draft here&hellip;"></textarea>
+            <div class="footbar" style="position:static; border:0; padding-top:11px">
+              <span class="foot-status" id="pasteCount">0 words</span>
+              <span class="engine-switch" id="engineSwitch" title="Which model reviews, rewrites and drafts the doctor sheet">
+                <span class="engine-label">Engine</span>
+                <button class="chip" data-engine="claude" aria-pressed="true">Claude</button>
+                <button class="chip" data-engine="openai" aria-pressed="false">ChatGPT</button>
+              </span>
+              <button class="btn" id="addPaste">Add to the list</button>
+            </div>
+          </div>
         </div>
-      </div>
 
-      <div class="panel picked-panel" id="pickedPanel" hidden>
-        <h3>Ready to send</h3>
-        <div id="pickedList"></div>
-        <div class="when" id="whenSwitch">
-          <button class="when-opt" data-mode="queue" aria-pressed="true">
-            <b>Send as a batch</b>
-            <span class="when-price" id="queuePrice">half price</span>
-            <small>All of them go together at half price; each article is still reviewed on its
-              own. Usually reviewed within the hour, always by tomorrow morning. You don't need
-              to keep the page open.</small>
-          </button>
-          <button class="when-opt" data-mode="now" aria-pressed="false">
-            <b>Review now</b>
-            <span class="when-price" id="nowPrice">full price</span>
-            <small>One article, reviewed straight away, about 90 seconds. For when someone is
-              waiting on the answer.</small>
-          </button>
-        </div>
-        <div class="footbar" style="position:static; border:0; padding-top:13px">
-          <span class="foot-status" id="pickedTotal"></span>
-          <div class="topbar-actions">
-            <button class="btn" id="clearPicked">Clear</button>
-            <button class="btn btn-primary" id="sendBtn">Send</button>
-            <span class="confirm-row" id="confirmRow" hidden>
+        <div class="panel picked-panel" id="pickedPanel">
+          <h3>Ready to send <span class="pick-count" id="pickCount"></span></h3>
+          <div id="pickedList"><div class="pick-empty">Nothing picked yet. Drop files on the left,
+            or paste a draft and add it.</div></div>
+          <div class="when" id="whenSwitch">
+            <button class="when-opt" data-mode="queue" aria-pressed="true">
+              <b>Send as a batch</b>
+              <span class="when-price" id="queuePrice">half price</span>
+              <small>All together at half price; each article still reviewed on its own.
+                Usually within the hour, always by tomorrow morning.</small>
+            </button>
+            <button class="when-opt" data-mode="now" aria-pressed="false">
+              <b>Review now</b>
+              <span class="when-price" id="nowPrice">full price</span>
+              <small>One article, straight away, about 90 seconds.</small>
+            </button>
+          </div>
+          <div class="pick-foot">
+            <span class="foot-status" id="pickedTotal"></span>
+            <div class="pick-acts">
+              <button class="btn" id="clearPicked">Clear</button>
+              <button class="btn btn-primary" id="sendBtn">Send</button>
+            </div>
+            <div class="confirm-row" id="confirmRow" hidden>
               <span id="confirmText"></span>
               <button class="btn btn-primary" id="sendYes">Yes, send</button>
               <button class="btn" id="sendNo">Cancel</button>
-            </span>
+            </div>
           </div>
         </div>
       </div>
