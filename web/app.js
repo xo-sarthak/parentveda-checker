@@ -613,7 +613,7 @@ async function openRun(runId, nav) {
   $('#s-review').innerHTML =
     '<div class="working"><span class="spinner"></span> Reopening&hellip;</div>';
   try {
-    const res = await api('/api/runs/' + runId + '?engine=' + engine);
+    const res = await api('/api/runs/' + runId);
     state.articleId = res.article_id;
     state.runId = res.run_id;
     state.review = res.review;

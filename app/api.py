@@ -378,7 +378,7 @@ def get_run(run_id: str, engine: str | None = None, who: str = Depends(auth.acto
         "article_id": str(run["article_id"]),
         "run_id": str(run["id"]),
         "title": run["title"],
-        "estimates": store.estimates(config.models(_engine(engine))),
+        "estimates": store.estimates(config.models(_engine_of_run(run_id))),
         "review": {
             "overall": float(run["overall"]),
             "verdict": run["verdict"],
@@ -444,6 +444,23 @@ class RewriteReq(BaseModel):
     engine: str | None = None
 
 
+def _engine_of_run(run_id: str) -> str:
+    """The engine that wrote this review. Follow-up steps stay on it, so a
+    gpt-5 review is never applied by Sonnet because a browser chip said so."""
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute("select model from runs where id=%s", (run_id,))
+        row = cur.fetchone()
+    return engines.engine_for(row["model"]) if row else config.ENGINE
+
+
+def _engine_of_article(article_id: str) -> str:
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute("select r.model from runs r join versions v on v.id=r.version_id "
+                    "where v.article_id=%s order by r.created_at desc limit 1", (article_id,))
+        row = cur.fetchone()
+    return engines.engine_for(row["model"]) if row else config.ENGINE
+
+
 def _run_row(run_id: str) -> dict:
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute(
@@ -465,7 +482,7 @@ def rewrite(req: RewriteReq, who: str = Depends(auth.actor)):
     changes, so re-reading them buys nothing — the Re-score button exists
     for anyone who wants a fresh number anyway.
     """
-    models = config.models(_engine(req.engine))
+    models = config.models(_engine_of_run(req.run_id))
     accepted = store.accepted_feedback(req.run_id)
     if not accepted:
         raise HTTPException(400, "Nothing accepted yet — accept at least one finding.")
@@ -541,7 +558,7 @@ def image_briefs(req: ImagesReq, who: str = Depends(auth.actor)):
     on the version they were written for."""
     row = _latest(req.article_id)
     res = images.briefs(row["body"], row["title"],
-                        model=config.models(_engine(req.engine))["images"])
+                        model=config.models(_engine_of_article(req.article_id))["images"])
     briefs = {k: v for k, v in res.items() if not k.startswith("_")}
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute("update versions set image_briefs=%s where id=%s",
@@ -583,7 +600,7 @@ def doctor_sheet(req: SheetReq, who: str = Depends(auth.actor)):
     res = doctor.sheet(row["body"], row["title"],
                        {"expert_review": row["expert_review"],
                         "article_type": None},
-                       model=config.models(_engine(req.engine))["doctor"])
+                       model=config.models(_engine_of_article(req.article_id))["doctor"])
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute(
             "insert into verification (article_id, specialty, sheet_text) "
