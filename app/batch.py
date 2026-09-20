@@ -333,6 +333,13 @@ def _close_batch(batch_id, b) -> None:
 def _ingest(client, batch_id, b) -> None:
     """Turn a finished batch into runs. Anything without a good result is
     re-queued once, then marked failed with the reason."""
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute("update batches set status='ingesting' where id=%s and status != 'ingesting' "
+                    "and status != all(%s)", (batch_id, list(_TERMINAL)))
+        claimed = cur.rowcount == 1
+        conn.commit()
+    if not claimed:
+        return
     results, errors = _read_output(client, b)
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute("select id, version_id, model, effort, attempts, created_by, created_at "
@@ -370,6 +377,14 @@ def _ingest(client, batch_id, b) -> None:
 def _ingest_shadow(client, batch_id, b) -> None:
     """Store the cheap model's take on each article. Never raises, never
     re-queues: the shadow is a data point, not a dependency."""
+    # Claim the batch first so two overlapping polls cannot both ingest it.
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute("update batches set status='ingesting' where id=%s and status != 'ingesting' "
+                    "and status != all(%s)", (batch_id, list(_TERMINAL)))
+        claimed = cur.rowcount == 1
+        conn.commit()
+    if not claimed:
+        return
     results, errors = _read_output(client, b)
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute("select id, version_id, effort from queue_items where shadow_batch_id=%s",
