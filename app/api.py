@@ -209,6 +209,10 @@ def _shape(result: dict, run_id: str) -> dict:
              "weight": config.WEIGHTS[p], **v}
             for p, v in result["scores"].items()
         ],
+        "scorecard": [
+            {"area": a, "label": config.SCORECARD_LABELS[a], **v}
+            for a, v in (result.get("scorecard") or {}).items()
+        ],
         "feedback": items,
         "usage": result["_usage"],
         "cost": store.cost_usd(result["_usage"]),
@@ -366,6 +370,10 @@ def get_run(run_id: str, engine: str | None = None, who: str = Depends(auth.acto
                     "where run_id=%s", (run_id,))
         scores = {r["parameter"]: dict(r) for r in cur.fetchall()}
 
+        cur.execute("select area, score, assessment from scorecard "
+                    "where run_id=%s order by position", (run_id,))
+        card = cur.fetchall()
+
         cur.execute(
             "select f.id, f.tier, f.kind, f.parameter, f.summary, f.quote, "
             "f.proposed, f.rationale, f.position, f.headline, f.needs_validation, "
@@ -391,6 +399,12 @@ def get_run(run_id: str, engine: str | None = None, who: str = Depends(auth.acto
                  "weight": config.WEIGHTS[p],
                  "score": float(v["score"]), "justification": v["justification"]}
                 for p, v in scores.items()
+            ],
+            "scorecard": [
+                {"area": r["area"],
+                 "label": config.SCORECARD_LABELS.get(r["area"], r["area"]),
+                 "score": float(r["score"]), "assessment": r["assessment"]}
+                for r in card
             ],
             "feedback": feedback,
             "usage": {"model": run["model"], "effort": run["effort"], "batch": run["batch"]},

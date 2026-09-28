@@ -682,3 +682,8 @@ input[type=checkbox]{accent-color:var(--accent); width:15px; height:15px}
 .pick-acts .btn-primary{flex:1}
 .confirm-row{display:flex; flex-wrap:wrap}
 @media (max-width:1100px){ .new-grid{grid-template-columns:1fr} .picked-panel{position:static} }
+
+/* ---- the 27-area scorecard */
+.cardtable td:nth-child(2){text-align:right; padding-right:14px; white-space:nowrap}
+.cardtable th:nth-child(2){text-align:right; padding-right:14px}
+.cardtable .card-overall td{border-top:1px solid var(--line-2); border-bottom:0; padding-top:9px}

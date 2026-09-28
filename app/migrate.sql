@@ -81,3 +81,16 @@ insert into batch_groups (id, seq, created_by, created_at)
   and not exists (select 1 from batch_groups);
 update queue_items q set group_id = g.id from batch_groups g
   where q.group_id is null and g.created_at = q.created_at and g.created_by is not distinct from q.created_by;
+
+-- The 27-area diagnostic scorecard, alongside the twelve weighted scores.
+-- Unweighted: it never touches overall or blockers.
+create table if not exists scorecard (
+  id         uuid primary key default uuid_generate_v4(),
+  run_id     uuid not null references runs(id) on delete cascade,
+  area       text not null,
+  score      numeric(3,1) not null,
+  assessment text,
+  position   int not null default 0,
+  unique (run_id, area)
+);
+create index if not exists scorecard_run_idx on scorecard (run_id);

@@ -129,6 +129,11 @@ def _insert_run(cur, version_id, review: dict, *, kind: str, actor: str | None,
                     "values (%s,%s,%s,%s)",
                     (run_id, param, v["score"], v["justification"]))
 
+    for i, (area, v) in enumerate((review.get("scorecard") or {}).items()):
+        cur.execute("insert into scorecard (run_id, area, score, assessment, position) "
+                    "values (%s,%s,%s,%s,%s) on conflict (run_id, area) do nothing",
+                    (run_id, area, v["score"], v.get("assessment", ""), i))
+
     rank = {"must": 0, "should": 1, "polish": 2}
     items = sorted(review["feedback"], key=lambda f: rank[f["tier"]])
     for i, f in enumerate(items):

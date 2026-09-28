@@ -89,3 +89,39 @@ PARAMETER_LABELS = {
 
 BLOCKER_FLOOR = 8.5
 BLOCKED_PARAMS = ("medical_accuracy", "safety_framing")
+
+# The detailed scorecard: 27 unweighted areas, scored alongside the twelve.
+# It does not touch the overall or the blockers — it exists so a writer can
+# see *where* a score came from at a finer grain than twelve rows allow.
+# Order is the order it is shown in, grouped by theme rather than by number.
+SCORECARD = [
+    ("medical_accuracy_detail", "Medical accuracy", "Definitions, causes, symptoms, timelines, prevalence, management and claims"),
+    ("evidence_validation", "Evidence & validation", "Important claims supported by credible evidence; what needs verifying"),
+    ("medical_safety", "Medical safety", "No diagnosis, individual interpretation, unsafe treatment or medication advice, false reassurance, dangerous omissions"),
+    ("red_flags", "Safety / red flags", "Warning signs, escalation points and when-to-see-a-doctor, correctly framed"),
+    ("clinical_nuance", "Clinical nuance", "Uncertainty, exceptions, overlap and context rather than simplistic claims"),
+    ("trust_credibility", "Trust & credibility", "Sounds responsible and medically trustworthy, not overconfident or sensational"),
+    ("parent_comprehension", "Parent comprehension", "Understandable without medical knowledge; jargon, ambiguity, unexplained terms"),
+    ("parent_practicality", "Parent usefulness", "What the information means and what she can reasonably do next"),
+    ("actionability", "Actionability", "What to observe, what to do, what not to do, when to seek help"),
+    ("answer_first", "Answer-first clarity", "The main question answered early, in the opening or quick answer"),
+    ("structure_ia", "Structure & architecture", "Logical sequence, each section with a purpose, a coherent reading journey"),
+    ("question_coverage", "Question coverage", "The natural questions a parent has; FAQs useful rather than filler"),
+    ("content_completeness", "Content completeness", "Important aspects of the topic present for this audience"),
+    ("engagement_quality", "Engagement", "Interesting and emotionally relevant without clickbait, fear or drama"),
+    ("central_idea", "Central idea", "Is there one strong central idea holding the article together"),
+    ("insight_vs_textbook", "Insight vs textbook", "Genuinely insightful with depth, or a generic textbook read"),
+    ("tone_voice", "Tone & brand voice", "Calm, warm, trustworthy, supportive; never patronising, cute or alarmist"),
+    ("conciseness", "Conciseness / density", "Every section earning its space; unnecessary detail or long passages"),
+    ("repetition", "Repetition", "Ideas duplicated across intro, takeaways, sections, Insight, FAQs, conclusion"),
+    ("editorial_quality", "Editorial quality", "Grammar, sentences, headings, tables, transitions, polish"),
+    ("seo_search_intent", "SEO / search intent", "Answers what parents search; headings search-friendly without stuffing"),
+    ("visual_opportunity", "Visual opportunity", "Where an image, comparison, diagram or table would materially help"),
+    ("visual_necessity", "Visual necessity", "Educational visuals distinguished from decorative ones"),
+    ("audience_relevance", "Audience & stage relevance", "Right for the baby's or pregnancy stage and the ParentVeda audience"),
+    ("indian_relevance", "Indian relevance", "Indian context reflected without stereotyping or unsupported claims"),
+    ("cross_consistency", "Cross-content consistency", "Terminology, claims and recommendations consistent with related content"),
+    ("internal_linking", "Internal linking / journey", "Related articles and next steps genuinely useful and connected"),
+]
+SCORECARD_KEYS = [k for k, _, _ in SCORECARD]
+SCORECARD_LABELS = {k: label for k, label, _ in SCORECARD}

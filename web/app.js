@@ -690,6 +690,22 @@ function renderReview() {
       </table>
     </details>
 
+    ${(r.scorecard || []).length ? `
+    <details class="params">
+      <summary><span class="caret">&rsaquo;</span> Scorecard &mdash; ${r.scorecard.length} areas in detail</summary>
+      <table class="ptable cardtable">
+        <thead><tr><th>Area</th><th>Score</th><th>Assessment</th></tr></thead>
+        <tbody>${r.scorecard.map(a => `<tr>
+          <td>${esc(a.label)}</td>
+          <td class="mono" style="color:${a.score >= 9 ? 'var(--good)' : a.score < 8.5 ? 'var(--must)' : 'inherit'}"><b>${a.score.toFixed(1)}</b></td>
+          <td class="note">${esc(a.assessment)}</td></tr>`).join('')}
+          <tr class="card-overall"><td><b>Overall</b></td>
+            <td class="mono"><b style="color:${BAND(s)}">${s.toFixed(1)}</b></td>
+            <td class="note">Weighted from the twelve parameters above</td></tr>
+        </tbody>
+      </table>
+    </details>` : ''}
+
     <div class="sec-head">
       <h2 class="sec-title">${r.feedback.length} findings</h2>
       <span class="kbd-hint"><kbd>A</kbd> accept &middot; <kbd>R</kbd> reject &middot; <kbd>J</kbd><kbd>K</kbd> move</span>

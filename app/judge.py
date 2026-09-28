@@ -5,12 +5,13 @@ from typing import Any
 from app import config, content, engines
 
 PARAMS = list(config.WEIGHTS.keys())
+CARD = config.SCORECARD_KEYS
 
 SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
     "required": [
-        "article_type", "article_level", "scores", "feedback",
+        "article_type", "article_level", "scores", "scorecard", "feedback",
         "verdict", "blockers", "expert_review",
     ],
     "properties": {
@@ -72,6 +73,25 @@ SCHEMA: dict[str, Any] = {
                     "justification": {
                         "type": "string",
                         "description": "Max 15 words, grounded in the text",
+                    },
+                },
+            },
+        },
+        # Unweighted diagnostic detail. Does not affect the overall; it shows
+        # a writer where the twelve weighted scores came from.
+        "scorecard": {
+            "type": "array",
+            "description": "All twenty-seven review areas, one entry each",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["area", "score", "assessment"],
+                "properties": {
+                    "area": {"type": "string", "enum": CARD},
+                    "score": {"type": "number", "description": "0-10, one decimal"},
+                    "assessment": {
+                        "type": "string",
+                        "description": "Max 10 words, grounded in the text",
                     },
                 },
             },
@@ -182,6 +202,11 @@ def finish(resp: dict) -> dict:
     missing = [p for p in PARAMS if p not in data["scores"]]
     if missing:
         raise RuntimeError("model omitted parameters: " + ", ".join(missing))
+
+    # The scorecard is diagnostic: a gap in it is worth noting, never fatal.
+    card = {row["area"]: {"score": row["score"], "assessment": row.get("assessment", "")}
+            for row in data.get("scorecard") or []}
+    data["scorecard"] = {k: card.get(k) for k in CARD if card.get(k)}
 
     data["overall"] = overall(data["scores"])
     data["blockers"] = check_blockers(data["scores"], data.get("blockers", []))
