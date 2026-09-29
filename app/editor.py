@@ -85,8 +85,12 @@ def apply(article: str, accepted: list[dict], model: str | None = None,
     judge already wrote the replacement — so they cost nothing. Only
     structural findings, and any line finding whose quote no longer matches,
     go to the model."""
+    # Findings about image prompts change the visual plan, not the article.
+    # They are copied from the review screen, never written into the text.
+    accepted = [f for f in accepted if f.get("kind") != "image"]
     if not accepted:
-        raise ValueError("Nothing was accepted — there is nothing to apply.")
+        raise ValueError("Nothing to apply to the text — the accepted findings are all "
+                         "about image prompts. Copy the revised prompts from the review.")
 
     body, swapped, to_model = article, [], []
     for f in accepted:

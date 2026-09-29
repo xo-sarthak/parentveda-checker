@@ -101,12 +101,20 @@ SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["tier", "type", "parameter", "summary", "quote",
-                             "proposed", "rationale", "headline",
+                "required": ["tier", "type", "area", "scope", "parameter", "summary",
+                             "quote", "proposed", "rationale", "headline",
                              "needs_validation"],
                 "properties": {
                     "tier": {"type": "string", "enum": ["must", "should", "polish"]},
-                    "type": {"type": "string", "enum": ["line", "structural"]},
+                    "type": {"type": "string", "enum": ["line", "structural", "image"],
+                             "description": "image = a finding about a planned image prompt"},
+                    # A plain string, not an enum: a second 27-value enum would
+                    # push the compiled grammar past Anthropic's limit. Checked
+                    # in code instead.
+                    "area": {"type": "string",
+                             "description": "The scorecard area key this finding is about"},
+                    "scope": {"type": "string", "enum": ["passage", "section", "pervasive"],
+                              "description": "pervasive = the problem runs through the article"},
                     "parameter": {"type": "string", "enum": PARAMS},
                     "summary": {"type": "string", "description": "Under 12 words"},
                     "quote": {
@@ -173,13 +181,21 @@ def check_blockers(scores: dict, model_blockers: list[str]) -> list[str]:
 MAX_TOKENS = 32000
 
 
-def parts(article: str, catalogue: str = "") -> tuple[list[str], str]:
+def parts(article: str, catalogue: str = "", visuals: str = "") -> tuple[list[str], str]:
     """System blocks and user message — the same for an instant review and a
     batched one, so scores stay comparable."""
     user = ""
     if catalogue:
         user += f"# PUBLISHED ARTICLE CATALOGUE\n\n{catalogue}\n\n---\n\n"
-    user += f"# DRAFT ARTICLE UNDER REVIEW\n\n{article}"
+    user += f"# DRAFT ARTICLE UNDER REVIEW\n\n{article}\n\n---\n\n"
+    if visuals:
+        user += ("# PLANNED VISUALS — image prompts and visual plan for this article\n\n"
+                 "Not article text. Review every prompt here (ruleset §1C): findings on "
+                 f"them use type \"image\".\n\n{visuals}")
+    else:
+        user += ("# PLANNED VISUALS\n\nNone supplied with this draft. Judge visuals on "
+                 "the tables and diagrams in the text, and say in the visual assessments "
+                 "that no image prompts were provided.")
     return [content.get("ruleset"), content.get("judge")], user
 
 
@@ -208,16 +224,64 @@ def finish(resp: dict) -> dict:
             for row in data.get("scorecard") or []}
     data["scorecard"] = {k: card.get(k) for k in CARD if card.get(k)}
 
+    bind_scores_to_findings(data)
     data["overall"] = overall(data["scores"])
     data["blockers"] = check_blockers(data["scores"], data.get("blockers", []))
     data["_usage"] = resp["usage"]
     return data
 
 
+def _kind(f: dict) -> str:
+    if f.get("scope") == "pervasive":
+        return "pervasive"
+    if f["tier"] == "must":
+        return "must_validate" if f.get("needs_validation") else "must"
+    return f["tier"]
+
+
+def bind_scores_to_findings(data: dict) -> None:
+    """Make the numbers and the findings tell the same story.
+
+    Every finding names a scorecard area; its weighted parameter is derived
+    from that, never chosen separately. A finding then caps the score of the
+    area it names — a must-fix area cannot read 9.0. Areas scored low with no
+    finding behind them are recorded, so the screen can say so rather than
+    hide it. The model's own number is kept wherever it was already stricter.
+    """
+    card = data["scorecard"]
+    worst: dict[str, float] = {}
+    pworst: dict[str, float] = {}
+    for f in data.get("feedback") or []:
+        area = (f.get("area") or "").strip()
+        if area not in config.AREA_TO_PARAM:
+            f["area"] = None
+            continue
+        f["parameter"] = config.AREA_TO_PARAM[area]
+        k = _kind(f)
+        worst[area] = min(worst.get(area, 10), config.CAPS_AREA[k])
+        if k in config.CAPS_PARAM:
+            p = f["parameter"]
+            pworst[p] = min(pworst.get(p, 10), config.CAPS_PARAM[k])
+
+    for area, cap in worst.items():
+        row = card.get(area)
+        if row and row["score"] > cap:
+            row["capped_from"] = row["score"]
+            row["score"] = cap
+    for p, cap in pworst.items():
+        row = data["scores"][p]
+        if row["score"] > cap:
+            row["capped_from"] = row["score"]
+            row["score"] = cap
+
+    data["unexplained"] = [a for a, row in card.items()
+                           if row["score"] < config.UNEXPLAINED_BELOW and a not in worst]
+
+
 def review(article: str, catalogue: str = "", model: str | None = None,
-           effort: str = "high") -> dict:
+           effort: str = "high", visuals: str = "") -> dict:
     model = model or config.MODELS["score"]
-    system, user = parts(article, catalogue)
+    system, user = parts(article, catalogue, visuals)
     resp = engines.complete(model=model, system=system, user=user, effort=effort,
                             max_tokens=MAX_TOKENS, schema=SCHEMA)
     return finish(resp)

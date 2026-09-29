@@ -94,3 +94,14 @@ create table if not exists scorecard (
   unique (run_id, area)
 );
 create index if not exists scorecard_run_idx on scorecard (run_id);
+
+-- Findings name the scorecard area they are about, how far the problem runs,
+-- and may concern a planned image prompt rather than the text.
+alter table feedback  add column if not exists area  text;
+alter table feedback  add column if not exists scope text;
+alter table scorecard add column if not exists capped_from numeric(3,1);
+alter table scores    add column if not exists capped_from numeric(3,1);
+alter table runs      add column if not exists unexplained jsonb;
+-- The image prompts and visual plan that came with the draft; the judge reviews them.
+alter table versions  add column if not exists visual_plan text;
+alter type feedback_kind add value if not exists 'image';

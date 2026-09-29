@@ -77,7 +77,8 @@ def ruleset_version() -> str:
 def save_review(title: str, body: str, review: dict, *, author: str | None = None,
                 article_id: str | None = None, kind: str = "review",
                 source: str = "upload", actor: str | None = None,
-                duration_s: float | None = None) -> dict[str, Any]:
+                duration_s: float | None = None,
+                visual_plan: str | None = None) -> dict[str, Any]:
     """Persist an article version and its review. Returns the ids created."""
     u = review["_usage"]
     with connect() as conn, conn.cursor() as cur:
@@ -95,9 +96,9 @@ def save_review(title: str, body: str, review: dict, *, author: str | None = Non
                     "where article_id=%s", (article_id,))
         vno = cur.fetchone()["n"]
         cur.execute(
-            "insert into versions (article_id, version_no, body, word_count, source) "
-            "values (%s,%s,%s,%s,%s) returning id",
-            (article_id, vno, body, len(body.split()), source))
+            "insert into versions (article_id, version_no, body, word_count, source, visual_plan) "
+            "values (%s,%s,%s,%s,%s,%s) returning id",
+            (article_id, vno, body, len(body.split()), source, visual_plan or None))
         version_id = cur.fetchone()["id"]
 
         run_id = _insert_run(cur, version_id, review, kind=kind, actor=actor,
@@ -125,25 +126,28 @@ def _insert_run(cur, version_id, review: dict, *, kind: str, actor: str | None,
     run_id = cur.fetchone()["id"]
 
     for param, v in review["scores"].items():
-        cur.execute("insert into scores (run_id, parameter, score, justification) "
-                    "values (%s,%s,%s,%s)",
-                    (run_id, param, v["score"], v["justification"]))
+        cur.execute("insert into scores (run_id, parameter, score, justification, capped_from) "
+                    "values (%s,%s,%s,%s,%s)",
+                    (run_id, param, v["score"], v["justification"], v.get("capped_from")))
 
     for i, (area, v) in enumerate((review.get("scorecard") or {}).items()):
-        cur.execute("insert into scorecard (run_id, area, score, assessment, position) "
-                    "values (%s,%s,%s,%s,%s) on conflict (run_id, area) do nothing",
-                    (run_id, area, v["score"], v.get("assessment", ""), i))
+        cur.execute("insert into scorecard (run_id, area, score, assessment, position, capped_from) "
+                    "values (%s,%s,%s,%s,%s,%s) on conflict (run_id, area) do nothing",
+                    (run_id, area, v["score"], v.get("assessment", ""), i, v.get("capped_from")))
+    cur.execute("update runs set unexplained=%s where id=%s",
+                (json.dumps(review.get("unexplained") or []), run_id))
 
     rank = {"must": 0, "should": 1, "polish": 2}
     items = sorted(review["feedback"], key=lambda f: rank[f["tier"]])
     for i, f in enumerate(items):
         cur.execute(
             "insert into feedback (run_id, tier, kind, parameter, summary, "
-            "quote, proposed, rationale, position, headline, needs_validation) "
-            "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id",
+            "quote, proposed, rationale, position, headline, needs_validation, area, scope) "
+            "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id",
             (run_id, f["tier"], f["type"], f["parameter"], f["summary"],
              f.get("quote"), f["proposed"], f.get("rationale"), i,
-             bool(f.get("headline")), bool(f.get("needs_validation"))))
+             bool(f.get("headline")), bool(f.get("needs_validation")),
+             f.get("area"), f.get("scope")))
         cur.execute("insert into decisions (feedback_id) values (%s)",
                     (cur.fetchone()["id"],))
     return run_id

@@ -629,6 +629,14 @@ async function openRun(runId, nav) {
 
 function renderReview() {
   const r = state.review, s = r.overall;
+  /* Scorecard ↔ findings, both directions: which findings explain an area,
+     and what score an area got, so each can point at the other. */
+  const areaOf = {};
+  (r.scorecard || []).forEach(a => { areaOf[a.area] = a; });
+  const findingsFor = {};
+  r.feedback.forEach(f => { if (f.area) (findingsFor[f.area] = findingsFor[f.area] || []).push(f); });
+  const unexplained = new Set(r.unexplained || []);
+  const scoreColour = v => v >= 9 ? 'var(--good)' : v < 8.5 ? 'var(--must)' : 'var(--should)';
   const groups = ['must', 'should', 'polish']
     .map(t => [t, r.feedback.filter(f => f.tier === t)]).filter(([, f]) => f.length);
 
@@ -691,17 +699,25 @@ function renderReview() {
     </details>
 
     ${(r.scorecard || []).length ? `
-    <details class="params">
-      <summary><span class="caret">&rsaquo;</span> Scorecard &mdash; ${r.scorecard.length} areas in detail</summary>
+    <details class="params"${unexplained.size || r.scorecard.some(a => a.score < 8.5) ? ' open' : ''}>
+      <summary><span class="caret">&rsaquo;</span> Scorecard &mdash; ${r.scorecard.length} areas
+        &middot; ${r.scorecard.filter(a => a.score < 8.5).length} below 8.5
+        ${unexplained.size ? `&middot; <span style="color:var(--must)">${unexplained.size} with no finding</span>` : ''}</summary>
       <table class="ptable cardtable">
-        <thead><tr><th>Area</th><th>Score</th><th>Assessment</th></tr></thead>
-        <tbody>${r.scorecard.map(a => `<tr>
+        <thead><tr><th>Area</th><th>Score</th><th>Assessment</th><th>Finding</th></tr></thead>
+        <tbody>${r.scorecard.map(a => {
+          const fs = findingsFor[a.area] || [];
+          return `<tr class="${a.score < 8.5 ? 'card-low' : ''}">
           <td>${esc(a.label)}</td>
-          <td class="mono" style="color:${a.score >= 9 ? 'var(--good)' : a.score < 8.5 ? 'var(--must)' : 'inherit'}"><b>${a.score.toFixed(1)}</b></td>
-          <td class="note">${esc(a.assessment)}</td></tr>`).join('')}
+          <td class="mono" style="color:${scoreColour(a.score)}"><b>${a.score.toFixed(1)}</b>
+            ${a.capped_from != null ? `<span class="card-cap" title="Lowered from ${a.capped_from.toFixed(1)} because a finding names this area">&darr;${a.capped_from.toFixed(1)}</span>` : ''}</td>
+          <td class="note">${esc(a.assessment)}</td>
+          <td class="card-fs">${fs.length
+            ? fs.map(f => `<a href="#" class="card-f t-${f.tier}" data-pos="${f.position}">#${f.position + 1}</a>`).join(' ')
+            : unexplained.has(a.area) ? '<span class="card-miss" title="Scored low but no finding says why">none &mdash; inconsistent</span>' : ''}</td></tr>`; }).join('')}
           <tr class="card-overall"><td><b>Overall</b></td>
             <td class="mono"><b style="color:${BAND(s)}">${s.toFixed(1)}</b></td>
-            <td class="note">Weighted from the twelve parameters above</td></tr>
+            <td class="note" colspan="2">Weighted from the twelve parameters above</td></tr>
         </tbody>
       </table>
     </details>` : ''}
@@ -718,25 +734,32 @@ function renderReview() {
           <span class="tier-count">${items.length}</span>
         </div>
         ${items.map(f => `
-          <article class="finding${f.headline ? ' is-headline' : ''}${f.outcome && f.outcome !== 'pending' ? ' done ' + (f.outcome === 'rejected' ? 'rejected' : 'accepted') : ''}" data-id="${f.id}" data-tier="${f.tier}" data-kind="${f.free ? 'line' : 'structural'}">
+          <article class="finding${f.headline ? ' is-headline' : ''}${f.outcome && f.outcome !== 'pending' ? ' done ' + (f.outcome === 'rejected' ? 'rejected' : 'accepted') : ''}" id="finding-${f.position}" data-id="${f.id}" data-tier="${f.tier}" data-kind="${f.kind === 'image' ? 'image' : f.free ? 'line' : 'structural'}">
             <div class="f-num">${f.position + 1}</div>
             <div class="f-body">
               ${f.headline ? '<div class="f-flag">Start here &mdash; the biggest issue</div>' : ''}
               <div class="f-sum">${esc(f.summary)}</div>
               <div class="f-param">
-                ${f.free
+                ${f.kind === 'image'
+                  ? '<span class="f-cost img" title="About a planned image, not the article text. Apply leaves it alone; copy the revised prompt.">Image prompt</span>'
+                  : f.free
                   ? '<span class="f-cost free" title="The replacement sentence is already written; applying it is an exact swap">Swap &middot; free</span>'
                   : `<span class="f-cost paid" title="${f.kind === 'line' ? 'The proposal is an instruction rather than the sentence itself' : "A change to the article's shape"}; ${esc(shortModel(est('rewrite').model || ''))} writes it">Rewrite &middot; ${approx(est('rewrite').usd)}</span>`}
-                ${esc(f.parameter)}${f.needs_validation ? ' &middot; <span class="f-val">clinician to confirm</span>' : ''}
+                ${f.area && areaOf[f.area]
+                  ? `<span class="f-area" style="border-color:${scoreColour(areaOf[f.area].score)}" title="The scorecard area this finding is about, and the score it has">${esc(areaOf[f.area].label)} &middot; <b style="color:${scoreColour(areaOf[f.area].score)}">${areaOf[f.area].score.toFixed(1)}</b></span>`
+                  : `<span>${esc(f.parameter)}</span>`}
+                ${f.scope === 'pervasive' ? '<span class="f-scope">Throughout the article</span>' : ''}
+                ${f.needs_validation ? '<span class="f-val">clinician to confirm</span>' : ''}
               </div>
               <div class="ba">
                 ${f.quote
-                  ? `<div class="ba-now"><b>What it says now</b><span>${esc(f.quote)}</span></div>`
+                  ? `<div class="ba-now"><b>${f.kind === 'image' ? 'Prompt as planned' : 'What it says now'}</b><span>${esc(f.quote)}</span></div>`
                   : `<div class="ba-now ba-none"><b>What it says now</b>
                      <span>Nothing to replace &mdash; this is a change to the article's
                      shape rather than to a sentence.</span></div>`}
                 <div class="ba-arrow" aria-hidden="true">&darr;</div>
-                <div class="ba-new"><b>${f.kind === 'line' ? 'Change it to' : 'What to do'}</b><span>${esc(f.proposed)}</span></div>
+                <div class="ba-new"><b>${f.kind === 'line' ? 'Change it to' : f.kind === 'image' ? 'Revised prompt' : 'What to do'}</b><span>${esc(f.proposed)}</span>
+                  ${f.kind === 'image' ? `<button class="btn btn-sm copy-prompt" data-text="${esc(f.proposed)}">Copy prompt</button>` : ''}</div>
               </div>
               ${f.rationale ? `<div class="f-why">${esc(f.rationale)}</div>` : ''}
             </div>
@@ -755,6 +778,13 @@ function renderReview() {
       </div>
     </div>`;
 
+  document.querySelectorAll('#s-review .card-f').forEach(a => a.onclick = e => {
+    e.preventDefault();
+    const el = $('#finding-' + a.dataset.pos);
+    if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1400); }
+  });
+  document.querySelectorAll('#s-review .copy-prompt').forEach(b => b.onclick = () =>
+    navigator.clipboard.writeText(b.dataset.text).then(() => toast('Prompt copied')));
   if (nav) {
     $('#bbBack').onclick = () => openBatch(nav.id);
     ['bbPrev', 'bbNext'].forEach(k => { const b = $('#' + k); if (b && !b.disabled)
@@ -783,11 +813,13 @@ function wireFindings() {
     const left = cards.filter(c => !c.classList.contains('done') && c.dataset.tier !== 'polish').length;
     const acc = accepted();
     const swaps = acc.filter(c => c.dataset.kind === 'line').length;
-    const rewrites = acc.length - swaps;
+    const imgs = acc.filter(c => c.dataset.kind === 'image').length;
+    const rewrites = acc.length - swaps - imgs;
     const cost = rewrites ? `${approx(est('rewrite').usd)}` : 'free';
     $('#tally').innerHTML = `${done} of ${cards.length} decided &middot; ${left} remaining above polish`
       + (acc.length ? `<br><b>${acc.length} accepted</b> &middot; ${swaps} swap${swaps === 1 ? '' : 's'} (free)`
         + (rewrites ? ` &middot; ${rewrites} rewrite${rewrites === 1 ? '' : 's'}` : '')
+        + (imgs ? ` &middot; ${imgs} image prompt${imgs === 1 ? '' : 's'} (copy by hand)` : '')
         + ` &middot; apply cost <b>${cost}</b>` : '');
     const btn = $('#applyBtn');
     if (btn) btn.innerHTML = !acc.length ? 'Apply &rarr;'

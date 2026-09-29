@@ -58,6 +58,38 @@ INTERNAL_MARKERS = (
 )
 
 
+# Headings that open the image or visual plan for an article. They are
+# internal (not article text) but the judge must see them: an image prompt
+# becomes an image, and a bad prompt is a bad visual.
+VISUAL_HEADINGS = ("visual experience recommendation", "visual recommendation",
+                   "visual plan", "visuals", "image prompt", "image prompts",
+                   "image brief", "image briefs", "cover image", "images",
+                   "illustration", "illustrations", "infographic")
+
+
+def _heading(raw: str) -> str | None:
+    line = raw.strip().lstrip("#").strip().strip("*_").rstrip(":").strip()
+    return line.lower() if line and len(line) <= 70 else None
+
+
+def extract_visuals(internal: str) -> str:
+    """The image prompts and visual plan from an article's internal sections,
+    as one block. Empty if the draft has none."""
+    if not internal:
+        return ""
+    lines, out, keep = internal.splitlines(), [], False
+    for raw in lines:
+        h = _heading(raw)
+        if h is not None:
+            if any(h.startswith(v) for v in VISUAL_HEADINGS):
+                keep = True
+            elif any(h.startswith(m) for m in INTERNAL_MARKERS):
+                keep = False
+        if keep:
+            out.append(raw)
+    return "\n".join(out).strip()
+
+
 def split_internal(body: str) -> tuple[str, str]:
     """Return (what a reader would see, what is internal).
 
@@ -66,11 +98,10 @@ def split_internal(body: str) -> tuple[str, str]:
     """
     lines = body.splitlines()
     for i, raw in enumerate(lines):
-        line = raw.strip().lstrip("#").strip().strip("*_").rstrip(":").strip()
-        if not line or len(line) > 70:
+        low = _heading(raw)
+        if low is None:
             continue
-        low = line.lower()
-        if any(low.startswith(m) or low == m for m in INTERNAL_MARKERS):
+        if any(low.startswith(m) or low == m for m in INTERNAL_MARKERS + VISUAL_HEADINGS[:6]):
             return "\n".join(lines[:i]).rstrip(), "\n".join(lines[i:]).strip()
     return body, ""
 

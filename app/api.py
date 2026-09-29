@@ -75,12 +75,13 @@ async def review(file: UploadFile | None = File(None),
     # judge.review blocks for minutes. On the event loop that freezes every
     # other request, so it runs in a worker thread instead.
     t0 = time.monotonic()
+    visuals = parse.extract_visuals(internal)
     result = await run_in_threadpool(
-        judge.review, body, content.catalogue(), models["score"])
+        judge.review, body, content.catalogue(), models["score"], "high", visuals)
     took = round(time.monotonic() - t0, 1)
 
     ids = store.save_review(title, body, result, author=author, actor=who,
-                            duration_s=took)
+                            duration_s=took, visual_plan=visuals)
     return {**ids,
             "review": {**_shape(result, ids["run_id"]), "duration_s": took},
             "estimates": store.estimates(models),
@@ -113,7 +114,8 @@ async def create_batch(files: list[UploadFile] = File([]),
         raise HTTPException(400, "; ".join(problems) or "Nothing to send.")
 
     g = batch.create_group(who)
-    batch.enqueue_many([(t, b) for t, b, _ in drafts], author=author, actor=who, group_id=g["id"])
+    batch.enqueue_many([(t, b, parse.extract_visuals(i)) for t, b, i in drafts],
+                       author=author, actor=who, group_id=g["id"])
     # Reply as soon as the batch exists; the upload to OpenAI runs behind the
     # response and the batch screen shows "Sending" until it has gone.
     import asyncio
@@ -169,10 +171,11 @@ async def queue_now(req: QueueNow, who: str = Depends(auth.actor)):
                                  "It will be ready soon.")
     models = config.models("openai")
     with store.connect() as conn, conn.cursor() as cur:
-        cur.execute("select body from versions where id=%s", (row["version_id"],))
-        body = cur.fetchone()["body"]
+        cur.execute("select body, visual_plan from versions where id=%s", (row["version_id"],))
+        v = cur.fetchone()
     t0 = time.monotonic()
-    result = await run_in_threadpool(judge.review, body, content.catalogue(), models["score"])
+    result = await run_in_threadpool(judge.review, v["body"], content.catalogue(),
+                                     models["score"], "high", v["visual_plan"] or "")
     took = round(time.monotonic() - t0, 1)
     ids = store.attach_run(str(row["version_id"]), result, actor=who,
                            duration_s=took, kind="review")
@@ -193,7 +196,7 @@ def _shape(result: dict, run_id: str) -> dict:
     """Trim the model payload to what the screen actually renders."""
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute("select id, tier, kind, parameter, summary, quote, proposed, "
-                    "rationale, position, headline, needs_validation "
+                    "rationale, position, headline, needs_validation, area, scope "
                     "from feedback where run_id=%s order by position",
                     (run_id,))
         items = [{**f, "free": editor.applies_free(f)} for f in cur.fetchall()]
@@ -213,6 +216,7 @@ def _shape(result: dict, run_id: str) -> dict:
             {"area": a, "label": config.SCORECARD_LABELS[a], **v}
             for a, v in (result.get("scorecard") or {}).items()
         ],
+        "unexplained": result.get("unexplained") or [],
         "feedback": items,
         "usage": result["_usage"],
         "cost": store.cost_usd(result["_usage"]),
@@ -366,18 +370,20 @@ def get_run(run_id: str, engine: str | None = None, who: str = Depends(auth.acto
         if not run:
             raise HTTPException(404, "No such run.")
 
-        cur.execute("select parameter, score, justification from scores "
+        cur.execute("select parameter, score, justification, capped_from from scores "
                     "where run_id=%s", (run_id,))
         scores = {r["parameter"]: dict(r) for r in cur.fetchall()}
 
-        cur.execute("select area, score, assessment from scorecard "
+        cur.execute("select area, score, assessment, capped_from from scorecard "
                     "where run_id=%s order by position", (run_id,))
         card = cur.fetchall()
+        cur.execute("select unexplained from runs where id=%s", (run_id,))
+        unexplained = (cur.fetchone() or {}).get("unexplained") or []
 
         cur.execute(
             "select f.id, f.tier, f.kind, f.parameter, f.summary, f.quote, "
             "f.proposed, f.rationale, f.position, f.headline, f.needs_validation, "
-            "d.outcome, d.edited_text "
+            "f.area, f.scope, d.outcome, d.edited_text "
             "from feedback f left join decisions d on d.feedback_id = f.id "
             "where f.run_id=%s order by f.position", (run_id,))
         feedback = [{**f, "free": editor.applies_free(f)} for f in cur.fetchall()]
@@ -397,15 +403,18 @@ def get_run(run_id: str, engine: str | None = None, who: str = Depends(auth.acto
             "scores": [
                 {"parameter": p, "label": config.PARAMETER_LABELS[p],
                  "weight": config.WEIGHTS[p],
-                 "score": float(v["score"]), "justification": v["justification"]}
+                 "score": float(v["score"]), "justification": v["justification"],
+                 "capped_from": float(v["capped_from"]) if v.get("capped_from") is not None else None}
                 for p, v in scores.items()
             ],
             "scorecard": [
                 {"area": r["area"],
                  "label": config.SCORECARD_LABELS.get(r["area"], r["area"]),
-                 "score": float(r["score"]), "assessment": r["assessment"]}
+                 "score": float(r["score"]), "assessment": r["assessment"],
+                 "capped_from": float(r["capped_from"]) if r["capped_from"] is not None else None}
                 for r in card
             ],
+            "unexplained": unexplained,
             "feedback": feedback,
             "usage": {"model": run["model"], "effort": run["effort"], "batch": run["batch"]},
             "cost": float(run["cost_usd"] or 0),
@@ -549,8 +558,11 @@ async def rescore(req: RescoreReq, who: str = Depends(auth.actor)):
         raise HTTPException(404, "No such version.")
 
     t0 = time.monotonic()
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute("select visual_plan from versions where id=%s", (req.version_id,))
+        vp = (cur.fetchone() or {}).get("visual_plan") or ""
     result = await run_in_threadpool(
-        judge.review, row["body"], content.catalogue(), models["score"])
+        judge.review, row["body"], content.catalogue(), models["score"], "high", vp)
     took = round(time.monotonic() - t0, 1)
 
     ids = store.attach_run(req.version_id, result, actor=who, duration_s=took)

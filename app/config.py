@@ -125,3 +125,43 @@ SCORECARD = [
 ]
 SCORECARD_KEYS = [k for k, _, _ in SCORECARD]
 SCORECARD_LABELS = {k: label for k, label, _ in SCORECARD}
+
+# Which weighted parameter each area rolls up into. A finding names its area;
+# its parameter is derived from this, so the two can never disagree.
+AREA_TO_PARAM = {
+    'medical_accuracy_detail': 'medical_accuracy',
+    'evidence_validation': 'medical_accuracy',
+    'medical_safety': 'safety_framing',
+    'red_flags': 'safety_framing',
+    'clinical_nuance': 'medical_accuracy',
+    'trust_credibility': 'safety_framing',
+    'parent_comprehension': 'clarity',
+    'parent_practicality': 'parent_usefulness',
+    'actionability': 'parent_usefulness',
+    'answer_first': 'reader_journey',
+    'structure_ia': 'reader_journey',
+    'question_coverage': 'completeness',
+    'content_completeness': 'completeness',
+    'engagement_quality': 'engagement',
+    'central_idea': 'reader_journey',
+    'insight_vs_textbook': 'engagement',
+    'tone_voice': 'engagement',
+    'conciseness': 'redundancy_focus',
+    'repetition': 'redundancy_focus',
+    'editorial_quality': 'publication_readiness',
+    'seo_search_intent': 'seo_intent',
+    'visual_opportunity': 'pattern_breaks',
+    'visual_necessity': 'visual_strategy',
+    'audience_relevance': 'completeness',
+    'indian_relevance': 'completeness',
+    'cross_consistency': 'publication_readiness',
+    'internal_linking': 'publication_readiness',
+}
+
+# Score ceilings a finding imposes on the area it names — and, for the two
+# heaviest kinds, on the weighted parameter above it. Enforced in code, so a
+# review cannot flag a real problem and still score the area as fine.
+CAPS_AREA = {"pervasive": 6.9, "must": 7.9, "must_validate": 8.4,
+             "should": 8.7, "polish": 8.9}
+CAPS_PARAM = {"pervasive": 7.4, "must": 8.4}
+UNEXPLAINED_BELOW = 8.5   # an area under this with no finding is flagged

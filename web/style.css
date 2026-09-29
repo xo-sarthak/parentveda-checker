@@ -687,3 +687,17 @@ input[type=checkbox]{accent-color:var(--accent); width:15px; height:15px}
 .cardtable td:nth-child(2){text-align:right; padding-right:14px; white-space:nowrap}
 .cardtable th:nth-child(2){text-align:right; padding-right:14px}
 .cardtable .card-overall td{border-top:1px solid var(--line-2); border-bottom:0; padding-top:9px}
+
+/* ---- findings name their scorecard area; scorecard points back */
+.f-param{display:flex; flex-wrap:wrap; gap:6px; align-items:center}
+.f-area{display:inline-block; padding:1px 7px; border:1px solid; border-radius:4px; font-size:11px; color:var(--ink-2); font-family:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif}
+.f-scope{display:inline-block; padding:1px 7px; border-radius:4px; font-size:11px; font-weight:600; background:var(--must-bg); color:var(--must)}
+.f-cost.img{background:var(--surface-2); color:var(--ink-2); border-color:var(--line-2)}
+.ba-new .copy-prompt{margin-top:8px}
+.finding.flash{box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); transition:box-shadow .3s}
+.cardtable .card-low td:first-child{font-weight:600}
+.card-cap{font-size:10.5px; color:var(--ink-3); margin-left:4px; font-weight:400}
+.card-fs{white-space:nowrap; font-size:12px}
+.card-f{text-decoration:none; font-family:"IBM Plex Mono",monospace; font-weight:600; margin-right:4px}
+.card-f.t-must{color:var(--must)} .card-f.t-should{color:var(--should)} .card-f.t-polish{color:var(--ink-3)}
+.card-miss{color:var(--must); font-size:11.5px; font-weight:600}

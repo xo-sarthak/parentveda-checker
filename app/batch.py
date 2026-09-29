@@ -56,22 +56,22 @@ def create_group(actor: str | None) -> dict:
     return dict(row)
 
 
-def enqueue_many(drafts: list[tuple[str, str]], *, author: str | None, actor: str | None,
+def enqueue_many(drafts: list[tuple[str, str, str]], *, author: str | None, actor: str | None,
                  group_id) -> int:
     """Store every draft and put it in the batch — one connection, one
     commit, so five articles cost one round trip and not ten. No model call
     happens here."""
     model = config.ENGINES["openai"]["score"]
     with store.connect() as conn, conn.cursor() as cur:
-        for title, body in drafts:
+        for title, body, visuals in drafts:
             cur.execute(
                 "insert into articles (title, author, status, created_by) "
                 "values (%s,%s,'draft',%s) returning id", (title, author, actor))
             article_id = cur.fetchone()["id"]
             cur.execute(
                 "insert into versions (article_id, version_no, body, word_count, source, "
-                "created_by) values (%s,1,%s,%s,'upload',%s) returning id",
-                (article_id, body, len(body.split()), actor))
+                "created_by, visual_plan) values (%s,1,%s,%s,'upload',%s,%s) returning id",
+                (article_id, body, len(body.split()), actor, visuals or None))
             version_id = cur.fetchone()["id"]
             cur.execute(
                 "insert into queue_items (article_id, version_id, model, effort, created_by, group_id) "
@@ -220,7 +220,7 @@ def submit() -> dict | None:
     was empty."""
     with store.connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "select q.id, q.model, q.effort, v.body from queue_items q "
+            "select q.id, q.model, q.effort, v.body, v.visual_plan from queue_items q "
             "join versions v on v.id = q.version_id "
             "where q.status='queued' order by q.created_at limit 500")
         items = cur.fetchall()
@@ -231,7 +231,7 @@ def submit() -> dict | None:
     catalogue = content.catalogue()
     main, shadow = [], []
     for it in items:
-        system, user = judge.parts(it["body"], catalogue)
+        system, user = judge.parts(it["body"], catalogue, it["visual_plan"] or "")
         body = engines.openai_request(it["model"], system, user, it["effort"],
                                       judge.MAX_TOKENS, judge.SCHEMA)
         main.append(json.dumps({"custom_id": str(it["id"]), "method": "POST",
